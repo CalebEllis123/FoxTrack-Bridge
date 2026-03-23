@@ -1,0 +1,16 @@
+# Built binaries
+foxtrack-bridge
+foxtrack-bridge.exe
+FoxTrack-Bridge-*
+
+# Config with secrets — users should never commit this
+config/config.json
+
+# Go
+*.test
+*.out
+vendor/
+
+# OS
+.DS_Store
+Thumbs.db
