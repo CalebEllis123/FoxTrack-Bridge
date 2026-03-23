@@ -84,8 +84,13 @@ func ConnectPrinter(p Printer) {
 			if err := connectAndListen(p); err != nil {
 				log.Printf("[%s] disconnected: %v — retrying in 60s", p.Name, err)
 
-				// Push "disconnected" to FoxTrack so the UI reflects reality
-				if p.WebhookURL != "" && p.APIKey != "" {
+				// Only push "disconnected" to FoxTrack if we haven't had a
+				// real status update in the last 5 minutes. BambuLab printers
+				// drop the MQTT connection frequently even while printing —
+				// we don't want a brief dropout to overwrite the real status.
+				state := GetPrinterState(p.Name)
+				stale := time.Now().Unix()-state.Timestamp > 300
+				if stale && p.WebhookURL != "" && p.APIKey != "" {
 					_ = webhook.Send(p.APIKey, p.WebhookURL, webhook.Payload{
 						PrinterName: p.Name,
 						Serial:      p.Serial,
