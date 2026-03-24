@@ -297,7 +297,15 @@ function onBrandChange() {
 
     document.getElementById('fieldSerial').style.display   = cfg.fields.serial   ? '' : 'none';
     document.getElementById('fieldLanCode').style.display  = cfg.fields.lanCode  ? '' : 'none';
-    document.getElementById('fieldPrusaKey').style.display = cfg.fields.prusaKey ? '' : 'none';
+    // Prusa key: must also remove the 'hidden' tailwind class
+    const prusaKeyEl = document.getElementById('fieldPrusaKey');
+    if (cfg.fields.prusaKey) {
+        prusaKeyEl.classList.remove('hidden');
+        prusaKeyEl.style.display = '';
+    } else {
+        prusaKeyEl.classList.add('hidden');
+        prusaKeyEl.style.display = 'none';
+    }
 }
 
 // ─── Test connection ──────────────────────────────────────────────────────────
