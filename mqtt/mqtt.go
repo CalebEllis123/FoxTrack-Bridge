@@ -74,7 +74,6 @@ func GetPrintersState() map[string]*TelemetryData {
 	return out
 }
 
-// ConnectPrinter starts a persistent background goroutine for one printer.
 func ConnectPrinter(p Printer) {
 	go func() {
 		for {
@@ -83,8 +82,6 @@ func ConnectPrinter(p Printer) {
 				log.Printf("[%s] disconnected: %v — retrying in 15s", p.Name, err)
 			}
 
-			// Only tell FoxTrack the printer is offline if we haven't
-			// had a real telemetry update in the last 5 minutes.
 			state := GetPrinterState(p.Name)
 			if time.Now().Unix()-state.Timestamp > 300 {
 				UpdatePrinterState(p.Name, TelemetryData{
@@ -137,7 +134,6 @@ func connectAndListen(p Printer) error {
 	}
 	log.Printf("[%s] MQTT connected", p.Name)
 
-	// Subscribe to the printer's report topic
 	topic := fmt.Sprintf("device/%s/report", p.Serial)
 	subToken := client.Subscribe(topic, 0, makeHandler(p))
 	if subToken.WaitTimeout(10*time.Second) && subToken.Error() != nil {
@@ -146,27 +142,48 @@ func connectAndListen(p Printer) error {
 	}
 	log.Printf("[%s] subscribed to %s", p.Name, topic)
 
-	// Mark as connecting locally (don't push to FoxTrack — not a real print status)
 	UpdatePrinterState(p.Name, TelemetryData{
 		Status:    "connected",
 		PrinterID: p.Name,
 		Timestamp: time.Now().Unix(),
 	})
 
-	// Request the printer's full current status immediately.
-	// Without this, idle printers never send a message and the bridge
-	// sits on "Connecting" forever. This forces the printer to broadcast
-	// everything it knows right now.
 	requestTopic := fmt.Sprintf("device/%s/request", p.Serial)
-	pushAllCmd := `{"pushing": {"sequence_id": "0", "command": "pushall"}}`
-	pubToken := client.Publish(requestTopic, 0, false, pushAllCmd)
-	pubToken.WaitTimeout(5 * time.Second)
-	log.Printf("[%s] sent pushall status request", p.Name)
 
-	// Block until connection-lost fires
+	// Send pushall immediately on connect so we get current status right away
+	sendPushall(client, p.Name, requestTopic)
+
+	// Poll every 2 minutes with pushall.
+	// BambuLab printers go silent when idle — without this, an idle printer
+	// never sends another MQTT message and FoxTrack shows "Bridge Offline"
+	// even though the bridge is fully connected.
+	// Each pushall causes the printer to re-broadcast its full state,
+	// which hits makeHandler and sends a fresh webhook, keeping last_seen_at alive.
+	go func() {
+		ticker := time.NewTicker(2 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				if client.IsConnected() {
+					sendPushall(client, p.Name, requestTopic)
+				}
+			}
+		}
+	}()
+
 	<-done
 	client.Disconnect(250)
 	return fmt.Errorf("connection lost")
+}
+
+func sendPushall(client mqtt.Client, printerName, requestTopic string) {
+	payload := `{"pushing": {"sequence_id": "0", "command": "pushall"}}`
+	token := client.Publish(requestTopic, 0, false, payload)
+	token.WaitTimeout(5 * time.Second)
+	log.Printf("[%s] sent pushall", printerName)
 }
 
 func makeHandler(p Printer) mqtt.MessageHandler {
@@ -178,14 +195,13 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 
 		pr := report.Print
 		if pr.GcodeState == "" {
-			return // ignore messages without a print state
+			return
 		}
 
 		status := mapGcodeState(pr.GcodeState)
-
-		// Only fire the webhook if something actually changed
 		currentState := GetPrinterState(p.Name)
-		changed := status != currentState.Status ||
+
+		statusChanged := status != currentState.Status ||
 			pr.SubTaskName != currentState.FileName ||
 			pr.McPercent != currentState.Progress
 
@@ -199,11 +215,21 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 
 		log.Printf("[%s] %s | %q | %d%%", p.Name, status, pr.SubTaskName, pr.McPercent)
 
-		if !changed {
+		if p.WebhookURL == "" || p.APIKey == "" {
+			log.Printf("[%s] skipping webhook — API key or URL not configured", p.Name)
 			return
 		}
 
-		if p.WebhookURL != "" && p.APIKey != "" {
+		// Send webhook on every message received.
+		// The pushall poll fires every 2 minutes, causing the printer to
+		// re-broadcast its state, which always reaches here and sends a
+		// fresh webhook — keeping FoxTrack's last_seen_at current.
+		// On active changes (print starting, progress) it fires instantly.
+		if statusChanged {
+			log.Printf("[%s] status changed → sending webhook immediately", p.Name)
+		}
+
+		go func() {
 			payload := webhook.Payload{
 				PrinterName: p.Name,
 				Serial:      p.Serial,
@@ -213,14 +239,10 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 				ErrorCode:   pr.McPrintErrorCode,
 				Timestamp:   time.Now().Unix(),
 			}
-			go func(payload webhook.Payload) {
-				if err := webhook.Send(p.APIKey, p.WebhookURL, payload); err != nil {
-					log.Printf("[%s] webhook error: %v", p.Name, err)
-				}
-			}(payload)
-		} else {
-			log.Printf("[%s] skipping webhook — API key or URL not configured", p.Name)
-		}
+			if err := webhook.Send(p.APIKey, p.WebhookURL, payload); err != nil {
+				log.Printf("[%s] webhook error: %v", p.Name, err)
+			}
+		}()
 	}
 }
 
