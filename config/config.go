@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"os"
+	"path/filepath"
 )
 
 type Config struct {
@@ -16,11 +17,21 @@ type Printer struct {
 	IP      string `json:"ip"`
 	Serial  string `json:"serial"`
 	LANCode string `json:"lan_code,omitempty"`
+	Brand   string `json:"brand,omitempty"`
 }
 
-// LoadConfig reads config from config/config.json
+// configPath returns the absolute path to config.json, always stored
+// next to the executable regardless of where the user runs it from.
+func configPath() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return filepath.Join("config", "config.json")
+	}
+	return filepath.Join(filepath.Dir(exe), "config", "config.json")
+}
+
 func LoadConfig() (*Config, error) {
-	data, err := os.ReadFile("config/config.json")
+	data, err := os.ReadFile(configPath())
 	if err != nil {
 		return nil, err
 	}
@@ -31,11 +42,14 @@ func LoadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-// SaveConfig writes config back to config/config.json
 func SaveConfig(cfg *Config) error {
+	p := configPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return err
+	}
 	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile("config/config.json", data, 0644)
+	return os.WriteFile(p, data, 0644)
 }
