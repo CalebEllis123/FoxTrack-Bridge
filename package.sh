@@ -4,7 +4,7 @@
 
 set -e
 OUT="./dist"
-APP_NAME="FoxTrack Bridge"
+APP_NAME="FoxTrack-Bridge"
 
 echo "=== Packaging for distribution ==="
 
