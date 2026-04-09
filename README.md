@@ -1,8 +1,6 @@
 ## FoxTrack Bridge
 
-FoxTrack Bridge runs on the same local network as your printer and sends printer data to FoxTrack.
-
-Today the Bridge is primarily built around Bambu Lab local LAN access. Creality and Prusa are still beta and not fully implemented yet.
+FoxTrack Bridge runs on the same local network as your printer and sends printer data to FoxTrack (https://foxtrack.studio/).
 
 ## What it does
 
@@ -15,9 +13,9 @@ Today the Bridge is primarily built around Bambu Lab local LAN access. Creality 
 ## Current support
 
 - Bambu Lab: supported
-- Creality: setup flow exists, full printer integration still incomplete
-- Prusa: setup flow exists, full printer integration still incomplete
-
+- Creality: setup flow exists, full printer integration is not confirmed to work yet
+- Prusa: setup flow exists, full printer integration is not confirmed to work yet
+  
 ## Downloads
 
 Release builds are published for these targets only:
@@ -37,7 +35,7 @@ Get the latest build from the GitHub releases page:
 ### 1. In FoxTrack
 
 - Open `Settings > Integrations > 3D Printer Integration`
-- Copy your API token and webhook URL
+- Copy your API token
 
 ### 2. On the machine running the Bridge
 
@@ -52,39 +50,15 @@ For Bambu Lab:
 - Put the printer in LAN Only Mode
 - Enable Developer Mode
 - Find the printer IP address
-- Find the Serial Number
+- Find the Serial Number (Visible in BambuStudio > Devices > Update)
 - Find the LAN Access Code
 - Enter those values into the Bridge dashboard
 
 For Creality and Prusa:
 
-- The UI can collect basic connection details
-- Full telemetry and control support is not finished yet
+- Find and enter the printer's IP address
+- (Prusa Only) Find and enter the Prusa API key
 
 ## Notes about controls
 
-- Pause, resume, stop, light toggle, and camera preview are wired into the Bridge for supported Bambu printers
-- Start print is available as an advanced action and currently expects a printer-accessible file path or URL
-- If a start command fails, the file path or printer firmware behavior is the first thing to check
-
-## Development
-
-The normal app uses a system tray.
-
-For environments that cannot compile tray dependencies, there is also a headless dev build mode:
-
-```bash
-go build -tags headless .
-```
-
-Headless builds start the local web server without the tray UI.
-
-## Build targets
-
-The project is configured to build only these release targets:
-
-- Windows x64
-- Windows Arm64
-- macOS Apple Silicon
-- macOS Intel
-- Linux x64
+- Pause, resume, and stop are wired into the Bridge for supported Bambu printers. Coming soon to Prusa and Creality printers
