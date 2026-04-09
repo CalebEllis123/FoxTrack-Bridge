@@ -364,6 +364,7 @@ async function addPrinter() {
     const ip = document.getElementById('pIp').value.trim();
     const serial = document.getElementById('pSerial').value.trim();
     const lanCode = document.getElementById('pLanCode').value.trim();
+    const prusaKey = document.getElementById('pPrusaKey').value.trim();
 
     if (!brand) { toast('Please select a printer brand', 'error'); return; }
     if (!name) { toast('Please enter a printer name', 'error'); return; }
@@ -377,7 +378,7 @@ async function addPrinter() {
     try {
         await apiFetch('/api/printers', {
             method: 'POST',
-            body: JSON.stringify({ name, ip, serial, lan_code: lanCode, brand }),
+            body: JSON.stringify({ name, ip, serial, lan_code: lanCode, api_key: prusaKey, brand }),
         });
         ['pName', 'pIp', 'pSerial', 'pLanCode', 'pPrusaKey'].forEach(id => {
             const el = document.getElementById(id);
@@ -426,7 +427,7 @@ function startPrint(name) {
     sendControl(name, 'start', { file_name: fileRef });
 }
 
-function toggleDetails(name) {
+function toggleCamera(name) {
     openRows[name] = !openRows[name];
     renderPrinters();
 }
@@ -497,7 +498,7 @@ function printerCard(printer) {
         + '</div>'
         + '<div class="flex items-center gap-2">'
         + '<span class="inline-flex items-center gap-1.5 border rounded-full px-2.5 py-1 text-xs ' + meta.badge + ' ' + meta.text + '"><span class="w-2 h-2 rounded-full ' + meta.dot + '"></span>' + meta.label + '</span>'
-        + '<button onclick="toggleDetails(' + JSON.stringify(printer.name) + ')" class="text-xs text-zinc-300 border border-zinc-700 hover:border-zinc-500 rounded-lg px-2.5 py-1.5">' + (open ? 'Hide' : 'Details') + '</button>'
+        + '<button onclick="toggleCamera(' + JSON.stringify(printer.name) + ')" class="text-xs text-zinc-300 border border-zinc-700 hover:border-zinc-500 rounded-lg px-2.5 py-1.5">' + (open ? 'Hide' : 'Camera') + '</button>'
         + '</div>'
         + '</div>'
         + '<p class="text-xs text-zinc-400 truncate mt-2" title="' + escHtml(file) + '">' + escHtml(file) + '</p>'
@@ -516,10 +517,13 @@ function printerCard(printer) {
                 + '<button ' + (controlsDisabled ? 'disabled ' : '') + 'onclick="sendControl(' + JSON.stringify(printer.name) + ',\'pause\')" class="text-xs px-2.5 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-500 disabled:opacity-50">Pause</button>'
                 + '<button ' + (controlsDisabled ? 'disabled ' : '') + 'onclick="sendControl(' + JSON.stringify(printer.name) + ',\'resume\')" class="text-xs px-2.5 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-500 disabled:opacity-50">Resume</button>'
                 + '<button ' + (controlsDisabled ? 'disabled ' : '') + 'onclick="sendControl(' + JSON.stringify(printer.name) + ',\'stop\')" class="text-xs px-2.5 py-1.5 rounded-lg border border-red-700/70 text-red-300 hover:border-red-500 disabled:opacity-50">Stop</button>'
-                + '<button ' + (controlsDisabled ? 'disabled ' : '') + 'onclick="sendControl(' + JSON.stringify(printer.name) + ',\'toggle_light\')" class="text-xs px-2.5 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-500 disabled:opacity-50">Toggle Light</button>'
+                + '<button ' + (controlsDisabled ? 'disabled ' : '') + 'onclick="sendControl(' + JSON.stringify(printer.name) + ',\'light\',{on:' + (!lightOn ? 'true' : 'false') + '})" class="text-xs px-2.5 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-500 disabled:opacity-50">Light</button>'
                 + '<button ' + (controlsDisabled ? 'disabled ' : '') + 'onclick="startPrint(' + JSON.stringify(printer.name) + ')" class="text-xs px-2.5 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-500 disabled:opacity-50">Start Print</button>'
-                + '<button onclick="openCameraModal(' + JSON.stringify(printer.name) + ')" class="text-xs px-2.5 py-1.5 rounded-lg border border-zinc-700 hover:border-zinc-500">Open Camera</button>'
                 + '<button onclick="removePrinter(' + JSON.stringify(printer.name) + ')" class="text-xs px-2.5 py-1.5 rounded-lg border border-red-700/70 text-red-300 hover:border-red-500">Remove</button>'
+                + '</div>'
+                + '<div class="mt-3 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950">'
+                + '<img src="/api/camera/' + encodeURIComponent(printer.name) + '" alt="Camera ' + escHtml(printer.name) + '" class="w-full max-h-72 object-contain bg-zinc-950" onerror="this.style.display=\'none\'; this.nextElementSibling.style.display=\'block\';">'
+                + '<p style="display:none" class="p-3 text-xs text-zinc-500">Camera feed unavailable for this printer.</p>'
                 + '</div>'
                 + '<p class="mt-2 text-[11px] text-zinc-500">Start Print requires a printer file URL/path that your Bambu printer can access. If the printer rejects it, verify the file path format.</p>'
             + '</div>'

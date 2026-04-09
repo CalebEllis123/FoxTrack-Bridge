@@ -80,13 +80,12 @@ cp "$OUT/foxtrack-bridge-linux-amd64" "$OUT/${APP_NAME}-Linux-x64"
 chmod +x "$OUT/${APP_NAME}-Linux-x64"
 echo "  Linux x64   → $OUT/${APP_NAME}-Linux-x64"
 
-cp "$OUT/foxtrack-bridge-linux-arm64" "$OUT/${APP_NAME}-Linux-arm64"
-chmod +x "$OUT/${APP_NAME}-Linux-arm64"
-echo "  Linux arm64 → $OUT/${APP_NAME}-Linux-arm64"
-
 # ─── Windows — rename with clear filename ─────────────────────────────────────
-cp "$OUT/foxtrack-bridge-windows-amd64.exe" "$OUT/${APP_NAME}-Windows.exe"
-echo "  Windows     → $OUT/${APP_NAME}-Windows.exe"
+cp "$OUT/foxtrack-bridge-windows-amd64.exe" "$OUT/${APP_NAME}-Windows-x64.exe"
+echo "  Windows x64 → $OUT/${APP_NAME}-Windows-x64.exe"
+
+cp "$OUT/foxtrack-bridge-windows-arm64.exe" "$OUT/${APP_NAME}-Windows-Arm64.exe"
+echo "  Windows Arm → $OUT/${APP_NAME}-Windows-Arm64.exe"
 
 echo ""
 echo "=== Done. Distributable files are in $OUT/ ==="
@@ -98,6 +97,6 @@ echo "  3. Double-click to open"
 echo "  4. If blocked: System Settings → Privacy & Security → Open Anyway"
 echo ""
 echo "Tell Windows users:"
-echo "  1. Download FoxTrack-Bridge-Windows.exe"
+echo "  1. Download the Windows x64 or Windows Arm build"
 echo "  2. Double-click to run"
 echo "  3. If SmartScreen appears: click 'More info' → 'Run anyway'"

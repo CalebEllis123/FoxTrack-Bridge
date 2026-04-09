@@ -15,12 +15,14 @@ import (
 	"time"
 
 	"foxtrack-bridge/config"
+	"foxtrack-bridge/lan"
 	mqttpkg "foxtrack-bridge/mqtt"
 )
 
 var (
 	configStore *config.Config
 	configMutex sync.RWMutex
+	lanCtrl     = lan.NewController()
 )
 
 func StartServer() {
@@ -34,11 +36,7 @@ func StartServer() {
 	configStore = cfg
 	configMutex.Unlock()
 
-	for _, p := range cfg.Printers {
-		if p.Brand == "bambu" || p.Brand == "" {
-			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
-		}
-	}
+	syncPrinterConnections(cfg)
 
 	// On startup, tell Supabase which serials are currently configured.
 	// Any bridge_printers rows for this token that aren't in the list get deleted.
@@ -91,7 +89,11 @@ func handleLogo(w http.ResponseWriter, r *http.Request) {
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	cors(w)
-	json.NewEncoder(w).Encode(mqttpkg.GetPrintersState())
+	merged := mqttpkg.GetPrintersState()
+	for k, v := range lanCtrl.GetStates() {
+		merged[k] = v
+	}
+	json.NewEncoder(w).Encode(merged)
 }
 
 // handleControl handles printer control commands.
@@ -131,10 +133,19 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if err := mqttpkg.SendCommandWithArgs(printerName, command, args); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
-		return
+	brand := printerBrand(printerName)
+	if brand == "bambu" || brand == "" {
+		if err := mqttpkg.SendCommandWithArgs(printerName, command, args); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		if err := lanCtrl.SendCommand(printerName, command, args); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
 	}
 
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "command": command, "printer": printerName})
@@ -165,6 +176,13 @@ func handleCamera(w http.ResponseWriter, r *http.Request) {
 
 	if found == nil {
 		http.Error(w, "printer not found", http.StatusNotFound)
+		return
+	}
+
+	if found.Brand != "bambu" && found.Brand != "" {
+		if err := lanCtrl.ProxyCamera(w, r, found.Name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		}
 		return
 	}
 
@@ -272,6 +290,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		configMutex.Lock()
 		configStore = &newCfg
 		configMutex.Unlock()
+		syncPrinterConnections(&newCfg)
 		if err := config.SaveConfig(&newCfg); err != nil {
 			log.Printf("Warning: failed to save config: %v", err)
 		}
@@ -307,7 +326,8 @@ func handlePrinters(w http.ResponseWriter, r *http.Request) {
 		if p.Brand == "bambu" || p.Brand == "" {
 			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
 		} else {
-			log.Printf("[%s] Brand '%s' connected (support coming soon)", p.Name, p.Brand)
+			lanCtrl.AddOrUpdatePrinter(p, cfg.WebhookURL, cfg.APIKey)
+			log.Printf("[%s] connected via LAN controller (%s)", p.Name, p.Brand)
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	default:
@@ -341,6 +361,7 @@ func handlePrinterByName(w http.ResponseWriter, r *http.Request) {
 	cfg := configStore
 	configMutex.Unlock()
 	_ = config.SaveConfig(cfg)
+	lanCtrl.RemovePrinter(name)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -377,6 +398,7 @@ func handleSync(w http.ResponseWriter, r *http.Request) {
 	cfg := configStore
 	configMutex.Unlock()
 	_ = config.SaveConfig(cfg)
+	lanCtrl.SyncPrinters(cfg.Printers, cfg.WebhookURL, cfg.APIKey)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -412,4 +434,24 @@ func syncPrintersToSupabase(cfg *config.Config) {
 	}
 	defer resp.Body.Close()
 	log.Printf("[sync] startup sync complete — %d printers registered", len(serials))
+}
+
+func syncPrinterConnections(cfg *config.Config) {
+	for _, p := range cfg.Printers {
+		if p.Brand == "bambu" || p.Brand == "" {
+			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
+		}
+	}
+	lanCtrl.SyncPrinters(cfg.Printers, cfg.WebhookURL, cfg.APIKey)
+}
+
+func printerBrand(name string) string {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	for _, p := range configStore.Printers {
+		if p.Name == name {
+			return p.Brand
+		}
+	}
+	return ""
 }

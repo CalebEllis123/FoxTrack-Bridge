@@ -139,6 +139,17 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 		payload = `{"system":{"sequence_id":"0","command":"ledctrl","led_node":"work_light","led_mode":"on","led_on_time":500,"led_off_time":500,"loop_times":0,"interval_time":0}}`
 	case "light_off":
 		payload = `{"system":{"sequence_id":"0","command":"ledctrl","led_node":"work_light","led_mode":"off","led_on_time":500,"led_off_time":500,"loop_times":0,"interval_time":0}}`
+	case "light":
+		on := getBoolArg(args, "on")
+		if on == nil {
+			onVal := !(state != nil && state.LightOn)
+			on = &onVal
+		}
+		if *on {
+			payload = `{"system":{"sequence_id":"0","command":"ledctrl","led_node":"work_light","led_mode":"on","led_on_time":500,"led_off_time":500,"loop_times":0,"interval_time":0}}`
+		} else {
+			payload = `{"system":{"sequence_id":"0","command":"ledctrl","led_node":"work_light","led_mode":"off","led_on_time":500,"led_off_time":500,"loop_times":0,"interval_time":0}}`
+		}
 	case "toggle_light":
 		if state != nil && state.LightOn {
 			payload = `{"system":{"sequence_id":"0","command":"ledctrl","led_node":"work_light","led_mode":"off","led_on_time":500,"led_off_time":500,"loop_times":0,"interval_time":0}}`
@@ -201,6 +212,21 @@ func getStringArg(args map[string]interface{}, key string) string {
 		return ""
 	}
 	return strings.TrimSpace(s)
+}
+
+func getBoolArg(args map[string]interface{}, key string) *bool {
+	if args == nil {
+		return nil
+	}
+	v, ok := args[key]
+	if !ok || v == nil {
+		return nil
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return nil
+	}
+	return &b
 }
 
 // printerSerials maps name → serial for control commands

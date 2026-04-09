@@ -1,66 +1,90 @@
-<div align="center">
-  <img src="https://raw.githubusercontent.com/FoxnTrain/FoxTrack-Bridge/main/assets/logo.png" alt="FoxTrack Bridge" width="80">
+## FoxTrack Bridge
 
-  # FoxTrack Bridge
+FoxTrack Bridge runs on the same local network as your printer and sends printer data to FoxTrack.
 
-  **Connect your local 3D printers (BambuLab, Creality, Prusa) to [FoxTrack](https://foxtrack.app) without cloud APIs.**
+Today the Bridge is primarily built around Bambu Lab local LAN access. Creality and Prusa are still beta and not fully implemented yet.
 
-  [![Release](https://img.shields.io/github/v/release/FoxnTrain/FoxTrack-Bridge?style=flat-square&color=f97316)](https://github.com/FoxnTrain/FoxTrack-Bridge/releases/latest)
-  [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-informational?style=flat-square)](https://github.com/FoxnTrain/FoxTrack-Bridge/releases/latest)
+## What it does
 
-</div>
+- Connects local printers to FoxTrack with your FoxTrack API token
+- Shows printer status, current file, progress, temperatures, light state, and time remaining
+- Sends telemetry to FoxTrack through the configured webhook
+- Exposes local controls for supported printers: pause, resume, stop, light toggle, camera preview, and start print
+- Opens a local dashboard at `http://localhost:8080`
 
----
+## Current support
 
-> **⚠️ Compatibility & Testing Notice**
-> Currently, the **BambuLab** integration has been tested on **Windows** and **Linux**. 
-> Integration for **Creality** and **Prusa** printers, as well as the **macOS** version of the bridge, have been recently added and are *currently untested*. 
-> 
-> If you have a Creality or Prusa printer, or if you are testing the bridge on a Mac, we would love your help! Please join our [Discord server](https://discord.gg/3hd96AFYBf) to share your feedback, report bugs, and help us improve the bridge.
+- Bambu Lab: supported
+- Creality: setup flow exists, full printer integration still incomplete
+- Prusa: setup flow exists, full printer integration still incomplete
 
-FoxTrack Bridge is a lightweight background app that runs on your local network and connects your 3D printers directly to FoxTrack LAN.
+## Downloads
 
-It sits in your system tray, should start automatically at login, and silently relays real-time printer status (print state, file name, progress, errors) to your FoxTrack dashboard.
+Release builds are published for these targets only:
 
-## Download
+- Windows x64
+- Windows Arm
+- macOS Apple Silicon
+- macOS Intel
+- Linux x64
 
-Get the latest version for your platform:
+Get the latest build from the GitHub releases page:
 
-| Platform | Download |
-|----------|----------|
-| Windows | [FoxTrack-Bridge-Windows.exe](https://github.com/FoxnTrain/FoxTrack-Bridge/releases/latest/download/FoxTrack-Bridge-Windows.exe) |
-| macOS (Apple Silicon) | [FoxTrack-Bridge-macOS-Apple-Silicon](https://github.com/FoxnTrain/FoxTrack-Bridge/releases/latest/download/FoxTrack-Bridge-macOS-Apple-Silicon) |
-| macOS (Intel) | [FoxTrack-Bridge-macOS-Intel](https://github.com/FoxnTrain/FoxTrack-Bridge/releases/latest/download/FoxTrack-Bridge-macOS-Intel) |
-| Linux | [FoxTrack-Bridge-Linux](https://github.com/FoxnTrain/FoxTrack-Bridge/releases/latest/download/FoxTrack-Bridge-Linux) |
+- https://github.com/CalebEllis123/FoxTrack-Bridge/releases/latest
 
 ## Setup
 
-### 1. Prepare your printer
+### 1. In FoxTrack
 
-Your printer must be connected to the same local network as the machine running the bridge. The specific requirements depend on your printer brand:
+- Open `Settings > Integrations > 3D Printer Integration`
+- Copy your API token and webhook URL
 
-**For BambuLab:**
-Your printer must be in **LAN Only Mode** to connect directly without BambuLab's cloud.
-- On the printer touchscreen: **Settings → Network → LAN Only Mode**
-- Scroll down and select **Developer Mode:** **Settings → Network → Developer Mode**
-- You'll need your **Serial Number** (Settings → Device Info) and **LAN Access Code & IP** (Settings → LAN Mode).
+### 2. On the machine running the Bridge
 
-**For Creality & Prusa:**
-Ensure your printer has local network access enabled and note down your printer's **IP Address** and any required local API credentials or access tokens required by your specific model. 
+- Download the correct build for your operating system
+- Launch the app
+- Open `http://localhost:8080` if the dashboard does not open automatically
 
-### 2. Get your FoxTrack credentials
+### 3. Add your printer
 
-In FoxTrack, go to **Settings → Integrations → 3D Printer Integration** and copy your **API Key**
+For Bambu Lab:
 
-### 3. Run FoxTrack Bridge
+- Put the printer in LAN Only Mode
+- Enable Developer Mode
+- Find the printer IP address
+- Find the Serial Number
+- Find the LAN Access Code
+- Enter those values into the Bridge dashboard
 
-**Run on Startup:** To make sure FoxTrack always is connected to the bridge, ensure the bridge is set to run on startup.
+For Creality and Prusa:
 
-**Windows:** Double-click the `.exe`. Windows may show a SmartScreen warning — click "More info" → "Run anyway". This is expected for unsigned apps.
+- The UI can collect basic connection details
+- Full telemetry and control support is not finished yet
 
-**macOS:** Right-click the file → Open → Open. macOS will warn about an unidentified developer on first launch — this is expected for apps not distributed through the App Store.
+## Notes about controls
 
-**Linux:** Make the file executable and run it:
+- Pause, resume, stop, light toggle, and camera preview are wired into the Bridge for supported Bambu printers
+- Start print is available as an advanced action and currently expects a printer-accessible file path or URL
+- If a start command fails, the file path or printer firmware behavior is the first thing to check
+
+## Development
+
+The normal app uses a system tray.
+
+For environments that cannot compile tray dependencies, there is also a headless dev build mode:
+
 ```bash
-chmod +x FoxTrack-Bridge-Linux
-./FoxTrack-Bridge-Linux
+go build -tags headless .
+```
+
+Headless builds start the local web server without the tray UI.
+
+## Build targets
+
+The project is configured to build only these release targets:
+
+- Windows x64
+- Windows Arm64
+- macOS Apple Silicon
+- macOS Intel
+- Linux x64
