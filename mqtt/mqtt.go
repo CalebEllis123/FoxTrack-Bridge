@@ -194,7 +194,12 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 	}
 
 	token := client.Publish(topic, 0, false, payload)
-	token.WaitTimeout(5 * time.Second)
+	if !token.WaitTimeout(5 * time.Second) {
+		return fmt.Errorf("command %q timed out for printer %q", command, printerName)
+	}
+	if err := token.Error(); err != nil {
+		return fmt.Errorf("command %q failed for printer %q: %w", command, printerName, err)
+	}
 	log.Printf("[%s] sent command: %s", printerName, command)
 	return nil
 }

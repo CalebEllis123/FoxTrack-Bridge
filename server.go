@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -281,57 +283,78 @@ func handleCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// BambuLab MJPEG stream: http://IP:6000/mjpeg/1 with basic auth bblp:lancode
-	streamURL := fmt.Sprintf("https://%s:6000/mjpeg/1", found.IP)
+	bambuCameraStream(w, found.IP, found.LANCode, printerName)
+}
 
-	req, err := http.NewRequest("GET", streamURL, nil)
+// bambuCameraStream proxies a BambuLab printer camera using the proprietary binary
+// protocol on port 6000: TLS connect → JSON auth → continuous 16-byte-header JPEG frames.
+func bambuCameraStream(w http.ResponseWriter, ip, lanCode, printerName string) {
+	conn, err := tls.DialWithDialer(
+		&net.Dialer{Timeout: 5 * time.Second},
+		"tcp",
+		net.JoinHostPort(ip, "6000"),
+		&tls.Config{InsecureSkipVerify: true},
+	)
 	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-	req.SetBasicAuth("bblp", found.LANCode)
-
-	// Use a transport that tolerates the printer's self-signed cert situation
-	transport := &http.Transport{
-		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
-		DialContext:       (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-		DisableKeepAlives: false,
-		IdleConnTimeout:   0,
-	}
-	client := &http.Client{Transport: transport, Timeout: 0} // no timeout — stream
-
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[camera/%s] failed to connect: %v", printerName, err)
+		log.Printf("[camera/%s] connect: %v", printerName, err)
 		http.Error(w, "camera unavailable", http.StatusBadGateway)
 		return
 	}
-	defer resp.Body.Close()
+	defer conn.Close()
 
-	// Forward the content type (should be multipart/x-mixed-replace for MJPEG)
-	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	// Build auth JSON safely
+	authBytes, _ := json.Marshal(map[string]interface{}{
+		"doctype": "auth",
+		"content": map[string]string{"user": "bblp", "passwd": lanCode},
+	})
+
+	// Send auth within 5 s
+	conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write(append(authBytes, '\n')); err != nil {
+		log.Printf("[camera/%s] auth write: %v", printerName, err)
+		http.Error(w, "camera unavailable", http.StatusBadGateway)
+		return
+	}
+
+	// Discard auth response (newline-terminated JSON) — 2 s timeout
+	reader := bufio.NewReader(conn)
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	reader.ReadString('\n') // ignore error — some firmware omits the response
+	conn.SetDeadline(time.Time{})
+
+	// Start MJPEG response
+	const boundary = "bambu"
+	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary="+boundary)
+	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
 
-	// Stream the body directly — this blocks until client disconnects
-	buf := make([]byte, 32*1024)
+	hdr := make([]byte, 16)
 	for {
-		n, err := resp.Body.Read(buf)
-		if n > 0 {
-			if _, werr := w.Write(buf[:n]); werr != nil {
-				break // client disconnected
-			}
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
+		// Each frame: 16-byte header (bytes 4-7 = little-endian payload size) + JPEG bytes
+		if _, err := io.ReadFull(reader, hdr); err != nil {
+			log.Printf("[camera/%s] header read: %v", printerName, err)
+			return
 		}
-		if err == io.EOF {
-			break
+		frameSize := binary.LittleEndian.Uint32(hdr[4:8])
+		if frameSize == 0 || frameSize > 5<<20 {
+			log.Printf("[camera/%s] invalid frame size %d", printerName, frameSize)
+			return
 		}
-		if err != nil {
-			log.Printf("[camera/%s] stream error: %v", printerName, err)
-			break
+		frame := make([]byte, frameSize)
+		if _, err := io.ReadFull(reader, frame); err != nil {
+			log.Printf("[camera/%s] frame read: %v", printerName, err)
+			return
+		}
+		// Write multipart MJPEG boundary
+		fmt.Fprintf(w, "--%s\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", boundary, frameSize)
+		if _, err := w.Write(frame); err != nil {
+			return // client disconnected
+		}
+		fmt.Fprint(w, "\r\n")
+		if flusher != nil {
+			flusher.Flush()
 		}
 	}
 }
