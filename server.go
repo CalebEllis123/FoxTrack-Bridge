@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +19,8 @@ import (
 	"foxtrack-bridge/config"
 	"foxtrack-bridge/lan"
 	mqttpkg "foxtrack-bridge/mqtt"
+	"foxtrack-bridge/update"
+	"foxtrack-bridge/version"
 )
 
 var (
@@ -49,6 +53,9 @@ func StartServer() {
 	http.HandleFunc("/api/printers/", handlePrinterByName) // DELETE /api/printers/{name}
 	http.HandleFunc("/api/sync", handleSync)               // POST — FoxTrack sends current printer list
 	http.HandleFunc("/api/status", handleStatus)
+	http.HandleFunc("/api/version", handleVersion)
+	http.HandleFunc("/api/update/check", handleUpdateCheck)
+	http.HandleFunc("/api/update/install", handleUpdateInstall)
 	http.HandleFunc("/api/test", handleTest)
 	http.HandleFunc("/api/control/", handleControl) // /api/control/{name}/{command}
 	http.HandleFunc("/api/camera/", handleCamera)   // /api/camera/{name}
@@ -94,6 +101,71 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 		merged[k] = v
 	}
 	json.NewEncoder(w).Encode(merged)
+}
+
+func handleVersion(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]string{"version": version.AppVersion})
+}
+
+func handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+	defer cancel()
+
+	result, err := update.CheckLatest(ctx)
+	if err != nil {
+		w.WriteHeader(http.StatusBadGateway)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(result)
+}
+
+func handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "POST" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 2*time.Minute)
+	defer cancel()
+
+	if err := update.StartInstall(ctx); err != nil {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "message": "update staged, restarting"})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		os.Exit(0)
+	}()
 }
 
 // handleControl handles printer control commands.

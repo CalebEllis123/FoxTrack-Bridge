@@ -5,6 +5,7 @@
 set -e
 OUT="./dist"
 APP_NAME="FoxTrack-Bridge"
+APP_VERSION="${APP_VERSION:-dev}"
 
 echo "=== Packaging for distribution ==="
 
@@ -50,9 +51,9 @@ make_mac_app() {
   <key>CFBundleDisplayName</key>
   <string>FoxTrack Bridge</string>
   <key>CFBundleVersion</key>
-  <string>1.1.6</string>
+  <string>${APP_VERSION}</string>
   <key>CFBundleShortVersionString</key>
-  <string>1.1.6</string>
+  <string>${APP_VERSION}</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>LSUIElement</key>

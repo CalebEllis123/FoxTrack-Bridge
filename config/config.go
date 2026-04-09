@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 )
@@ -21,9 +22,8 @@ type Printer struct {
 	Brand   string `json:"brand,omitempty"`
 }
 
-// configPath returns the absolute path to config.json, always stored
-// next to the executable regardless of where the user runs it from.
-func configPath() string {
+// legacyConfigPath is the old location used by previous builds.
+func legacyConfigPath() string {
 	exe, err := os.Executable()
 	if err != nil {
 		return filepath.Join("config", "config.json")
@@ -31,8 +31,27 @@ func configPath() string {
 	return filepath.Join(filepath.Dir(exe), "config", "config.json")
 }
 
+// configPath returns the preferred persistent user config location.
+func configPath() string {
+	base, err := os.UserConfigDir()
+	if err != nil || base == "" {
+		return legacyConfigPath()
+	}
+	return filepath.Join(base, "FoxTrack-Bridge", "config.json")
+}
+
 func LoadConfig() (*Config, error) {
-	data, err := os.ReadFile(configPath())
+	preferredPath := configPath()
+	data, err := os.ReadFile(preferredPath)
+	if errors.Is(err, os.ErrNotExist) {
+		legacyPath := legacyConfigPath()
+		legacyData, legacyErr := os.ReadFile(legacyPath)
+		if legacyErr != nil {
+			return nil, err
+		}
+		data = legacyData
+		err = nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -40,6 +59,10 @@ func LoadConfig() (*Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return nil, err
 	}
+
+	// Best-effort migration so future updates keep using the stable user config path.
+	_ = SaveConfig(&cfg)
+
 	return &cfg, nil
 }
 

@@ -52,6 +52,19 @@
         </div>
     </div>
 
+    <div id="updateModal" class="fixed inset-0 z-50 hidden bg-zinc-950/85 backdrop-blur-sm flex items-center justify-center p-4">
+        <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-xl">
+            <h3 class="text-lg font-semibold">Update Available</h3>
+            <p class="mt-2 text-sm text-zinc-400">FoxTrack Bridge <span id="updateVersionLabel" class="text-orange-400"></span> is available. Saved printers and settings stay intact during update.</p>
+            <p id="updateProgress" class="mt-3 hidden text-xs text-zinc-500"></p>
+            <div class="mt-5 flex flex-wrap gap-2">
+                <button id="updateNowBtn" onclick="installUpdate()" class="bg-orange-500 hover:bg-orange-600 active:bg-orange-700 text-white font-semibold px-4 py-2 rounded-xl text-sm transition-colors">Update Now</button>
+                <button onclick="dismissUpdateModal()" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold px-4 py-2 rounded-xl text-sm transition-colors">Later</button>
+                <button onclick="openReleaseNotes()" class="bg-zinc-800 hover:bg-zinc-700 text-zinc-200 font-semibold px-4 py-2 rounded-xl text-sm transition-colors">Release Notes</button>
+            </div>
+        </div>
+    </div>
+
     <div class="min-h-screen flex flex-col">
         <header class="bg-zinc-900 border-b border-zinc-800 px-4 sm:px-6 py-4">
             <div class="max-w-7xl mx-auto flex items-center justify-between gap-4">
@@ -172,7 +185,7 @@
         </main>
 
         <footer class="bg-zinc-900 border-t border-zinc-800 py-3 px-6 text-center text-zinc-600 text-xs">
-            FoxTrack Bridge v1.1.6
+            FoxTrack Bridge <span id="footerVersion">(checking version...)</span>
         </footer>
     </div>
 
@@ -180,6 +193,7 @@
 let configuredPrinters = [];
 let liveStatus = {};
 let openRows = {};
+let updateInfo = null;
 
 const brands = {
     bambu: {
@@ -568,6 +582,73 @@ async function pollStatus() {
     }
 }
 
+function setFooterVersion(v) {
+    const el = document.getElementById('footerVersion');
+    if (!el) return;
+    el.textContent = 'v' + String(v || 'dev');
+}
+
+function showUpdateModal(info) {
+    updateInfo = info;
+    const modal = document.getElementById('updateModal');
+    const label = document.getElementById('updateVersionLabel');
+    if (!modal || !label) return;
+    label.textContent = info.latestVersion || 'new version';
+    modal.classList.remove('hidden');
+}
+
+function dismissUpdateModal() {
+    const modal = document.getElementById('updateModal');
+    if (modal) modal.classList.add('hidden');
+}
+
+function openReleaseNotes() {
+    if (!updateInfo || !updateInfo.releaseUrl) return;
+    window.open(updateInfo.releaseUrl, '_blank', 'noopener');
+}
+
+function setUpdateProgress(text, isError = false) {
+    const el = document.getElementById('updateProgress');
+    if (!el) return;
+    el.classList.remove('hidden');
+    el.className = 'mt-3 text-xs ' + (isError ? 'text-red-300' : 'text-zinc-500');
+    el.textContent = text;
+}
+
+async function checkForUpdate() {
+    try {
+        const versionInfo = await apiFetch('/api/version');
+        setFooterVersion(versionInfo && versionInfo.version ? versionInfo.version : 'dev');
+    } catch (_) {
+        setFooterVersion('dev');
+    }
+
+    try {
+        const info = await apiFetch('/api/update/check');
+        if (info && info.available) {
+            showUpdateModal(info);
+        }
+    } catch (_) {
+        // Silent on update check failures to avoid noisy UX during temporary network issues.
+    }
+}
+
+async function installUpdate() {
+    const btn = document.getElementById('updateNowBtn');
+    if (btn) btn.disabled = true;
+    setUpdateProgress('Downloading and staging update...');
+
+    try {
+        await apiFetch('/api/update/install', { method: 'POST' });
+        setUpdateProgress('Update installed. Bridge will restart now.');
+        toast('Update installed. Restarting bridge...', 'info');
+    } catch (e) {
+        setUpdateProgress('Update failed: ' + e.message, true);
+        toast('Update failed: ' + e.message, 'error');
+        if (btn) btn.disabled = false;
+    }
+}
+
 function setBridgeStatus(online) {
     const el = document.getElementById('bridgeStatus');
     if (online) {
@@ -579,6 +660,7 @@ function setBridgeStatus(online) {
 
 (async () => {
     await loadConfig();
+    await checkForUpdate();
     renderPrinters();
     await pollStatus();
     setInterval(pollStatus, 5000);
