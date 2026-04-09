@@ -17,6 +17,7 @@ type Printer struct {
 	IP      string `json:"ip"`
 	Serial  string `json:"serial"`
 	LANCode string `json:"lan_code,omitempty"`
+	APIKey  string `json:"api_key,omitempty"`
 	Brand   string `json:"brand,omitempty"`
 }
 

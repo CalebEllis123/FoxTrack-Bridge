@@ -9,17 +9,20 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
 
 	"foxtrack-bridge/config"
+	"foxtrack-bridge/lan"
 	mqttpkg "foxtrack-bridge/mqtt"
 )
 
 var (
 	configStore *config.Config
 	configMutex sync.RWMutex
+	lanCtrl     = lan.NewController()
 )
 
 func StartServer() {
@@ -33,11 +36,7 @@ func StartServer() {
 	configStore = cfg
 	configMutex.Unlock()
 
-	for _, p := range cfg.Printers {
-		if p.Brand == "bambu" || p.Brand == "" {
-			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
-		}
-	}
+	syncPrinterConnections(cfg)
 
 	// On startup, tell Supabase which serials are currently configured.
 	// Any bridge_printers rows for this token that aren't in the list get deleted.
@@ -90,7 +89,11 @@ func handleLogo(w http.ResponseWriter, r *http.Request) {
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	cors(w)
-	json.NewEncoder(w).Encode(mqttpkg.GetPrintersState())
+	merged := mqttpkg.GetPrintersState()
+	for k, v := range lanCtrl.GetStates() {
+		merged[k] = v
+	}
+	json.NewEncoder(w).Encode(merged)
 }
 
 // handleControl handles printer control commands.
@@ -112,16 +115,40 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "usage: /api/control/{printer_name}/{command}", http.StatusBadRequest)
 		return
 	}
-	printerName := parts[0]
-	command := parts[1]
-
-	if err := mqttpkg.SendCommand(printerName, command); err != nil {
-		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+	printerName, err := url.PathUnescape(parts[0])
+	if err != nil {
+		http.Error(w, "invalid printer name", http.StatusBadRequest)
 		return
 	}
+	command := parts[1]
 
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "command": command})
+	var args map[string]interface{}
+	if r.Body != nil {
+		defer r.Body.Close()
+		dec := json.NewDecoder(r.Body)
+		if err := dec.Decode(&args); err != nil && err != io.EOF {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": "invalid JSON body"})
+			return
+		}
+	}
+
+	brand := printerBrand(printerName)
+	if brand == "bambu" || brand == "" {
+		if err := mqttpkg.SendCommandWithArgs(printerName, command, args); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+	} else {
+		if err := lanCtrl.SendCommand(printerName, command, args); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+			return
+		}
+	}
+
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok", "command": command, "printer": printerName})
 }
 
 // handleCamera proxies the BambuLab MJPEG camera stream.
@@ -135,6 +162,9 @@ func handleCamera(w http.ResponseWriter, r *http.Request) {
 
 	printerName := strings.TrimPrefix(r.URL.Path, "/api/camera/")
 	printerName = strings.TrimSuffix(printerName, "/")
+	if decodedName, err := url.PathUnescape(printerName); err == nil {
+		printerName = decodedName
+	}
 
 	// Find the printer config
 	configMutex.RLock()
@@ -152,6 +182,13 @@ func handleCamera(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if found.Brand != "bambu" && found.Brand != "" {
+		if err := lanCtrl.ProxyCamera(w, r, found.Name); err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+		}
+		return
+	}
+
 	// BambuLab MJPEG stream: http://IP:6000/mjpeg/1 with basic auth bblp:lancode
 	streamURL := fmt.Sprintf("https://%s:6000/mjpeg/1", found.IP)
 
@@ -164,10 +201,10 @@ func handleCamera(w http.ResponseWriter, r *http.Request) {
 
 	// Use a transport that tolerates the printer's self-signed cert situation
 	transport := &http.Transport{
-		TLSClientConfig:     &tls.Config{InsecureSkipVerify: true},
-		DialContext:         (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-		DisableKeepAlives:   false,
-		IdleConnTimeout:     0,
+		TLSClientConfig:   &tls.Config{InsecureSkipVerify: true},
+		DialContext:       (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		DisableKeepAlives: false,
+		IdleConnTimeout:   0,
 	}
 	client := &http.Client{Transport: transport, Timeout: 0} // no timeout — stream
 
@@ -256,6 +293,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		configMutex.Lock()
 		configStore = &newCfg
 		configMutex.Unlock()
+		syncPrinterConnections(&newCfg)
 		if err := config.SaveConfig(&newCfg); err != nil {
 			log.Printf("Warning: failed to save config: %v", err)
 		}
@@ -291,7 +329,8 @@ func handlePrinters(w http.ResponseWriter, r *http.Request) {
 		if p.Brand == "bambu" || p.Brand == "" {
 			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
 		} else {
-			log.Printf("[%s] Brand '%s' connected (support coming soon)", p.Name, p.Brand)
+			lanCtrl.AddOrUpdatePrinter(p, cfg.WebhookURL, cfg.APIKey)
+			log.Printf("[%s] connected via LAN controller (%s)", p.Name, p.Brand)
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 	default:
@@ -325,6 +364,7 @@ func handlePrinterByName(w http.ResponseWriter, r *http.Request) {
 	cfg := configStore
 	configMutex.Unlock()
 	_ = config.SaveConfig(cfg)
+	lanCtrl.RemovePrinter(name)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -361,6 +401,7 @@ func handleSync(w http.ResponseWriter, r *http.Request) {
 	cfg := configStore
 	configMutex.Unlock()
 	_ = config.SaveConfig(cfg)
+	lanCtrl.SyncPrinters(cfg.Printers, cfg.WebhookURL, cfg.APIKey)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
@@ -396,4 +437,24 @@ func syncPrintersToSupabase(cfg *config.Config) {
 	}
 	defer resp.Body.Close()
 	log.Printf("[sync] startup sync complete — %d printers registered", len(serials))
+}
+
+func syncPrinterConnections(cfg *config.Config) {
+	for _, p := range cfg.Printers {
+		if p.Brand == "bambu" || p.Brand == "" {
+			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
+		}
+	}
+	lanCtrl.SyncPrinters(cfg.Printers, cfg.WebhookURL, cfg.APIKey)
+}
+
+func printerBrand(name string) string {
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	for _, p := range configStore.Printers {
+		if p.Name == name {
+			return p.Brand
+		}
+	}
+	return ""
 }

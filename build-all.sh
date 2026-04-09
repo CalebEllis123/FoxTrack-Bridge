@@ -1,21 +1,10 @@
 #!/bin/bash
-echo "Building FoxTrack Bridge for all platforms..."
+set -e
 
-# Build the main bridge application
-echo "Building main bridge..."
-go build -o foxtrack-bridge
+echo "Running standard multi-platform build..."
+bash ./build.sh
 
-# Build for Linux (default)
-echo "Building for Linux..."
-go build -o foxtrack-bridge-linux
+echo "Packaging release artifacts..."
+bash ./package.sh
 
-# Build for Windows (if cross-compiling)
-echo "Building for Windows..."
-GOOS=windows GOARCH=amd64 go build -o foxtrack-bridge.exe
-
-# Build for macOS
-echo "Building for macOS..."
-GOOS=darwin GOARCH=amd64 go build -o foxtrack-bridge-mac
-
-echo "Build complete! Files created:"
-ls -la foxtrack-bridge*
+echo "Done. Supported targets: Windows x64, Windows Arm64, macOS Apple Silicon, macOS Intel, Linux x64."
