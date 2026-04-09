@@ -31,12 +31,54 @@ var (
 	lanCtrl     = lan.NewController()
 )
 
+// logBuf stores recent log lines for display in the UI log panel.
+var (
+	logBuf   []string
+	logBufMu sync.Mutex
+	logSubs  []chan string
+	logSubMu sync.Mutex
+)
+
+// logWriter captures log output, appends it to logBuf, and fans it out to SSE subscribers.
+type logWriter struct{ underlying io.Writer }
+
+func (lw *logWriter) Write(p []byte) (int, error) {
+	line := strings.TrimRight(string(p), "\r\n")
+	if line != "" {
+		logBufMu.Lock()
+		logBuf = append(logBuf, line)
+		if len(logBuf) > 500 {
+			logBuf = logBuf[len(logBuf)-500:]
+		}
+		logBufMu.Unlock()
+
+		logSubMu.Lock()
+		for _, ch := range logSubs {
+			select {
+			case ch <- line:
+			default:
+			}
+		}
+		logSubMu.Unlock()
+	}
+	return lw.underlying.Write(p)
+}
+
+// sseEscape makes a string safe to embed in a single SSE data field.
+func sseEscape(s string) string {
+	return strings.NewReplacer("\n", " ", "\r", "").Replace(s)
+}
+
 func StartServer() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Printf("No config found (%v) — starting fresh", err)
 		cfg = &config.Config{Printers: []config.Printer{}}
 	}
+
+	// Redirect log output through logWriter so the UI can stream it.
+	log.SetOutput(&logWriter{underlying: os.Stderr})
+	log.SetFlags(log.LstdFlags)
 
 	configMutex.Lock()
 	configStore = cfg
@@ -62,10 +104,64 @@ func StartServer() {
 	http.HandleFunc("/api/test", handleTest)
 	http.HandleFunc("/api/control/", handleControl) // /api/control/{name}/{command}
 	http.HandleFunc("/api/camera/", handleCamera)   // /api/camera/{name}
+	http.HandleFunc("/api/logs", handleLogs)        // GET — SSE log stream
 
 	fmt.Println("FoxTrack Bridge running at http://localhost:8080")
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Printf("Server error: %v", err)
+	}
+}
+
+// handleLogs streams log lines to the browser as SSE (Server-Sent Events).
+func handleLogs(w http.ResponseWriter, r *http.Request) {
+	if r.Method == "OPTIONS" {
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Send existing buffered lines on connect.
+	logBufMu.Lock()
+	snapshot := make([]string, len(logBuf))
+	copy(snapshot, logBuf)
+	logBufMu.Unlock()
+	for _, line := range snapshot {
+		fmt.Fprintf(w, "data: %s\n\n", sseEscape(line))
+	}
+	flusher.Flush()
+
+	// Subscribe to new lines.
+	ch := make(chan string, 64)
+	logSubMu.Lock()
+	logSubs = append(logSubs, ch)
+	logSubMu.Unlock()
+	defer func() {
+		logSubMu.Lock()
+		for i, c := range logSubs {
+			if c == ch {
+				logSubs = append(logSubs[:i], logSubs[i+1:]...)
+				break
+			}
+		}
+		logSubMu.Unlock()
+	}()
+
+	for {
+		select {
+		case line := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", sseEscape(line))
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
 	}
 }
 
