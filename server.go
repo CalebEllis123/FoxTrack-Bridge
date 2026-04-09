@@ -162,6 +162,9 @@ func handleCamera(w http.ResponseWriter, r *http.Request) {
 
 	printerName := strings.TrimPrefix(r.URL.Path, "/api/camera/")
 	printerName = strings.TrimSuffix(printerName, "/")
+	if decodedName, err := url.PathUnescape(printerName); err == nil {
+		printerName = decodedName
+	}
 
 	// Find the printer config
 	configMutex.RLock()
