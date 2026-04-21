@@ -2,6 +2,8 @@
 
 FoxTrack Bridge runs on the same local network as your printer and sends printer data to FoxTrack (https://foxtrack.studio/).
 
+<img width="1877" height="899" alt="screenshot-2026-04-21_15-43-47" src="https://github.com/user-attachments/assets/6e4efe37-e0eb-4be4-ac98-4c042312bfa4" />
+
 ## What it does
 
 - Connects local printers to FoxTrack with your FoxTrack API token
