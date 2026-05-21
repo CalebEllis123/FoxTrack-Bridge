@@ -2,7 +2,6 @@
 
 ![GitHub release](https://img.shields.io/github/v/release/FoxesRCool1/FoxTrack-Bridge)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue)
-![License](https://img.shields.io/github/license/FoxesRCool1/FoxTrack-Bridge)
 
 FoxTrack Bridge is a local 3D printer dashboard and integration server. It runs on any machine on the same network as your printers and gives you a real-time web dashboard for monitoring status, live camera feeds, print history, and basic printer controls. It also connects to [FoxTrack](https://foxtrack.studio/) so you can monitor your printers from anywhere.
 
