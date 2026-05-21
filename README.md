@@ -47,7 +47,9 @@ Download the binary for your platform and launch it. The system tray icon appear
 
 **2. Open the dashboard**
 
-Navigate to [http://localhost:8080](http://localhost:8080) in your browser. From other devices on the same network, use the IP address shown in the startup output (e.g. `http://192.168.1.100:8080`).
+Navigate to [http://localhost:8080](http://localhost:8080) in your browser. 
+
+From other devices on the same network, use the IP address shown in the startup output in the log (e.g. `http://192.168.x.xxx:8080`). For this to work you may need to disable WiFi AP Isolation on your router.
 
 **3. Connect to FoxTrack (optional)**
 
@@ -78,7 +80,7 @@ In Printers, click "Add Printer", select the printer type, fill in the required 
 
 ## Raspberry Pi
 
-The Linux ARM build is designed for single-board computers — no display or desktop environment is required.
+The Linux ARM build is designed for single-board computers, no display or desktop environment is required.
 
 **Quick install:**
 
