@@ -54,6 +54,7 @@ type BambuReport struct {
 }
 
 type BambuPrint struct {
+	Msg                int     `json:"msg"`
 	GcodeState         string  `json:"gcode_state"`
 	SubTaskName        string  `json:"subtask_name"`
 	McPercent          int     `json:"mc_percent"`
@@ -619,7 +620,7 @@ func connectAndListen(p Printer) error {
 	sendPushall(client, p.Name, requestTopic)
 
 	go func() {
-		ticker := time.NewTicker(2 * time.Minute)
+		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -648,14 +649,19 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 	return func(_ mqtt.Client, msg mqtt.Message) {
 		var report BambuReport
 		if err := json.Unmarshal(msg.Payload(), &report); err != nil {
+			log.Printf("[%s] MQTT parse error: %v | payload: %.120s", p.Name, err, msg.Payload())
 			return
 		}
 
 		pr := report.Print
 
 		// Ignore messages that carry no print or system data at all.
-		hasData := pr.GcodeState != "" || pr.NozzleTemper != 0 || pr.BedTemper != 0 || len(pr.Lights) > 0 || pr.Ams != nil || pr.SpdLvl != 0
+		// msg:1 is a wifi signal heartbeat — silent skip, expected every few seconds.
+		hasData := pr.GcodeState != "" || pr.NozzleTemper != 0 || pr.BedTemper != 0 || len(pr.Lights) > 0 || pr.Ams != nil || pr.SpdLvl != 0 || pr.McPercent != 0 || pr.McRemainingTime != 0
 		if !hasData {
+			if pr.Msg != 1 {
+				log.Printf("[%s] MQTT skip (no usable data) | gcode=%q nozzle=%.1f bed=%.1f | payload: %.120s", p.Name, pr.GcodeState, pr.NozzleTemper, pr.BedTemper, msg.Payload())
+			}
 			return
 		}
 
