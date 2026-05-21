@@ -19,6 +19,7 @@ type Printer struct {
 	LANCode      string `json:"lan_code,omitempty"`
 	MoonrakerURL string `json:"moonraker_url,omitempty"`
 	APIKey       string `json:"api_key,omitempty"`
+	WebcamURL    string `json:"webcam_url,omitempty"`
 }
 
 // legacyConfigPath is the old location used by previous builds.

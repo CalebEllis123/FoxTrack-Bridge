@@ -279,7 +279,7 @@ func sendJSONRequest(client *http.Client, method, u string, headers map[string]s
 }
 
 func fetchKlipperTelemetry(p configpkg.Printer) (mqttpkg.TelemetryData, webhook.RelayPayload, error) {
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 5 * time.Second, Transport: insecureTransport()}
 	u := moonrakerURL(p, "/printer/objects/query?print_stats&heater_bed&extruder&display_status&virtual_sdcard")
 	m, err := sendJSONRequest(client, "GET", u, moonrakerAuthHeaders(p), nil)
 	if err != nil {
@@ -382,7 +382,7 @@ func mapMoonrakerRelayState(state string) string {
 }
 
 func (c *Controller) sendKlipperCommand(p configpkg.Printer, state *mqttpkg.TelemetryData, command string, args map[string]interface{}) error {
-	client := &http.Client{Timeout: 6 * time.Second}
+	client := &http.Client{Timeout: 6 * time.Second, Transport: insecureTransport()}
 	headers := moonrakerAuthHeaders(p)
 
 	switch command {
@@ -504,18 +504,26 @@ func cameraCandidates(p configpkg.Printer) []string {
 		return []string{fmt.Sprintf("https://%s:6000/mjpeg/1", p.IP)}
 	}
 
+	// If the user specified a webcam URL, try it first before guessing.
+	if strings.TrimSpace(p.WebcamURL) != "" {
+		return []string{strings.TrimSpace(p.WebcamURL)}
+	}
+
 	base := strings.TrimRight(p.MoonrakerURL, "/")
 	out := []string{
 		base + "/webcam/?action=stream",
 		base + "/webcam/?action=snapshot",
 		base + "/snapshot",
 	}
-	if u, err := url.Parse(base); err == nil && u.Scheme != "" && u.Host != "" {
-		hostBase := u.Scheme + "://" + u.Host
+	if u, err := url.Parse(base); err == nil && u.Scheme != "" && u.Hostname() != "" {
+		// Derive the plain host (no port) to try port-80 nginx/crowsnest paths
+		// and port-8080 mjpg-streamer paths, which are common in Mainsail/Fluidd setups.
+		host := u.Scheme + "://" + u.Hostname()
 		out = append(out,
-			hostBase+"/webcam/?action=stream",
-			hostBase+"/webcam/?action=snapshot",
-			hostBase+"/snapshot",
+			host+"/webcam/?action=stream",
+			host+"/webcam/?action=snapshot",
+			host+":8080/?action=stream",
+			host+":8080/stream",
 		)
 	}
 

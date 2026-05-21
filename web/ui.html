@@ -153,6 +153,13 @@
                         class="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 rounded-xl px-3.5 py-2.5 text-sm font-mono focus:outline-none focus:ring-1 focus:ring-white/20"
                         placeholder="Moonraker API key">
                 </div>
+                <div id="fieldWebcamUrl" class="hidden">
+                    <label class="block text-zinc-400 text-xs font-medium mb-1.5 uppercase tracking-wide">Webcam URL (Optional)</label>
+                    <input type="text" id="pWebcamUrl" autocomplete="off"
+                        class="w-full bg-zinc-950 border border-zinc-800 text-zinc-100 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-white/20"
+                        placeholder="http://192.168.1.120/webcam/?action=stream">
+                    <p class="text-zinc-500 text-[11px] mt-1">Leave blank to auto-detect. Set this if the camera button doesn't work.</p>
+                </div>
                 <div class="flex items-center gap-2 pt-1 flex-wrap">
                     <button onclick="testConnection()" id="testBtn" class="btn-outline">Test Connection</button>
                     <button onclick="addPrinter()" id="connectBtn" class="btn-primary" style="padding:0.5rem 1rem;font-size:0.875rem">Connect</button>
@@ -358,11 +365,11 @@ const cameraLoading = new Set(); // enc values whose camera stream is still load
 const brands = {
     bambu: {
         instructions: '<div class="bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-xs text-zinc-400">Enable LAN Only and Developer Mode on the printer, then copy the Serial Number and LAN Access Code from the printer settings.</div>',
-        fields: { ip: true, serial: true, lanCode: true, moonrakerUrl: false, klipperKey: false }
+        fields: { ip: true, serial: true, lanCode: true, moonrakerUrl: false, klipperKey: false, webcamUrl: false }
     },
     klipper: {
         instructions: '<div class="bg-zinc-950 border border-zinc-800 rounded-xl p-3 text-xs text-zinc-400">Use your Moonraker endpoint (usually http://printer-ip:7125). API key is only needed if Moonraker auth is enabled.</div>',
-        fields: { ip: false, serial: false, lanCode: false, moonrakerUrl: true, klipperKey: true }
+        fields: { ip: false, serial: false, lanCode: false, moonrakerUrl: true, klipperKey: true, webcamUrl: true }
     }
 };
 
@@ -451,6 +458,7 @@ function statusMeta(status) {
         paused:       { label:'Paused',     dot:'bg-yellow-400 pulse', text:'text-yellow-300',  badge:'bg-yellow-500/10 border-yellow-500/30' },
         finished:     { label:'Finished',   dot:'bg-blue-400',         text:'text-blue-300',    badge:'bg-blue-500/10 border-blue-500/30' },
         error:        { label:'Error',      dot:'bg-red-400 pulse',    text:'text-red-300',     badge:'bg-red-500/10 border-red-500/30' },
+        cancelled:    { label:'Cancelled',  dot:'bg-zinc-500',         text:'text-zinc-400',    badge:'bg-zinc-800/40 border-zinc-700' },
         disconnected: { label:'Offline',    dot:'bg-zinc-700',         text:'text-zinc-400',    badge:'bg-zinc-800/60 border-zinc-700' },
         connected:    { label:'Connected',  dot:'bg-zinc-500',         text:'text-zinc-400',    badge:'bg-zinc-800/40 border-zinc-700' },
         idle:         { label:'Idle',       dot:'bg-emerald-400',      text:'text-emerald-300', badge:'bg-emerald-500/10 border-emerald-500/30' },
@@ -549,7 +557,7 @@ function openAddPrinterModal() {
 
 function closeAddPrinterModal() {
     document.getElementById('addPrinterModal').classList.add('hidden');
-    ['pName','pIp','pMoonrakerUrl','pSerial','pLanCode','pKlipperKey'].forEach(id => { const el=document.getElementById(id); if(el) { el.value=''; el.classList.remove(FIELD_ERROR_CLASS); } });
+    ['pName','pIp','pMoonrakerUrl','pSerial','pLanCode','pKlipperKey','pWebcamUrl'].forEach(id => { const el=document.getElementById(id); if(el) { el.value=''; el.classList.remove(FIELD_ERROR_CLASS); } });
     document.getElementById('pBrand').value = '';
     document.getElementById('brandInstructions').classList.add('hidden');
     document.getElementById('printerFields').classList.add('hidden');
@@ -576,6 +584,8 @@ function onBrandChange() {
     cfg.fields.moonrakerUrl ? (mu.classList.remove('hidden'), mu.style.display='') : (mu.classList.add('hidden'), mu.style.display='none');
     const kk = document.getElementById('fieldKlipperKey');
     cfg.fields.klipperKey ? (kk.classList.remove('hidden'), kk.style.display='') : (kk.classList.add('hidden'), kk.style.display='none');
+    const wc = document.getElementById('fieldWebcamUrl');
+    cfg.fields.webcamUrl ? (wc.classList.remove('hidden'), wc.style.display='') : (wc.classList.add('hidden'), wc.style.display='none');
     const pn = document.getElementById('pName');
     if (pn) pn.placeholder = cfg.fields.moonrakerUrl ? 'e.g. Creality K1' : 'e.g. Studio P1S';
 }
@@ -630,6 +640,7 @@ async function addPrinter() {
     const serial = document.getElementById('pSerial').value.trim();
     const lanCode = document.getElementById('pLanCode').value.trim();
     const klipperKey = document.getElementById('pKlipperKey').value.trim();
+    const webcamUrl = document.getElementById('pWebcamUrl').value.trim();
     const errEl = document.getElementById('addPrinterError');
     if (errEl) { errEl.textContent=''; errEl.classList.add('hidden'); }
 
@@ -649,7 +660,7 @@ async function addPrinter() {
     const btn = document.getElementById('connectBtn');
     if (btn) { btn.textContent='Connecting...'; btn.disabled=true; }
     try {
-        await apiFetch('/api/printers', { method:'POST', body:JSON.stringify({ name, ip, serial, lan_code:lanCode, moonraker_url:moonrakerUrl, api_key:klipperKey }) });
+        await apiFetch('/api/printers', { method:'POST', body:JSON.stringify({ name, ip, serial, lan_code:lanCode, moonraker_url:moonrakerUrl, api_key:klipperKey, webcam_url:webcamUrl }) });
         closeAddPrinterModal();
         toast('Connecting to ' + name + '...', 'info');
         await loadConfig();
