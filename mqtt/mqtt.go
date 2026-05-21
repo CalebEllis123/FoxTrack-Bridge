@@ -203,7 +203,7 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 	sendLights := func(mode string) error {
 		for _, node := range []string{"chamber_light", "chamber_light2"} {
 			p := ledPayload(node, mode)
-			tok := client.Publish(topic, 0, false, p)
+			tok := client.Publish(topic, 1, false, p)
 			if err := tok.Error(); err != nil {
 				return fmt.Errorf("light command failed for %q: %w", printerName, err)
 			}
@@ -413,7 +413,7 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 	}
 
 	// QoS 0: same reasoning as sendLights above — BambuLab broker drops QoS-1 PUBACKs.
-	token := client.Publish(topic, 0, false, payload)
+	token := client.Publish(topic, 1, false, payload)
 	if err := token.Error(); err != nil {
 		return fmt.Errorf("command %q failed for printer %q: %w", command, printerName, err)
 	}
@@ -640,7 +640,7 @@ func connectAndListen(p Printer) error {
 
 func sendPushall(client mqtt.Client, printerName, requestTopic string) {
 	payload := `{"pushing": {"sequence_id": "0", "command": "pushall"}}`
-	client.Publish(requestTopic, 0, false, payload)
+	client.Publish(requestTopic, 1, false, payload)
 	log.Printf("[%s] sent pushall", printerName)
 }
 
