@@ -29,13 +29,13 @@ Among many other tools, AI was used to develop this program. If you have a probl
 
 ## Supported Platforms
 
-| Platform | Notes |
-|---|---|
+| Platform |
+|---|
 | Windows x64 | 
 | macOS Apple Silicon |
 | macOS Intel |
 | Linux x64 |
-| Linux ARM (Headless) | Open `http://<ip>:8080` from any device on the network |
+| Linux ARM (Headless) |
 
 Download the latest builds from the [GitHub releases page](https://github.com/FoxesRCool1/FoxTrack-Bridge/releases/latest).
 
@@ -74,7 +74,7 @@ In Printers, click "Add Printer", select the printer type, fill in the required 
 
 ### Klipper / Moonraker
 
-1. Find your Moonraker URL — usually `http://192.168.x.x:7125`.
+1. Find your Moonraker URL, usually `http://192.168.x.x:7125`.
 2. In the Bridge dashboard under Settings, select **Klipper / Moonraker**, enter the URL, and click Connect.
 3. If Moonraker has authentication enabled, also provide the Moonraker API key.
 
@@ -139,4 +139,4 @@ go test ./...
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT - free to use, modify, and redistribute with attribution.
