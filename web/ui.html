@@ -353,6 +353,7 @@ let removeMode = false;
 let selectedForRemoval = new Set();
 let advancedMode = false;
 const pendingLightTarget = {}; // name -> expected light_on boolean; cleared when poll confirms state
+const cameraLoading = new Set(); // enc values whose camera stream is still loading
 
 const brands = {
     bambu: {
@@ -777,7 +778,16 @@ function renderPrinters() {
         if (!panel) return;
         panel.classList.remove('hidden');
         const img = panel.querySelector('img');
-        if (img && !img.src.endsWith('/api/camera/' + enc)) img.src = '/api/camera/' + enc;
+        if (img && !img.src.endsWith('/api/camera/' + enc)) {
+            if (cameraLoading.has(enc)) {
+                img.onload = img.onerror = () => {
+                    cameraLoading.delete(enc);
+                    const b = document.querySelector('#pcard-' + enc + ' .cam-btn');
+                    if (b) b.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
+                };
+            }
+            img.src = '/api/camera/' + enc;
+        }
     });
     // Restore open gcode panels
     openGcode.forEach(enc => {
@@ -875,7 +885,7 @@ function printerCard(printer) {
         + '<button ' + dis + 'onclick="sendControlEncoded(\'' + enc + '\',\'resume\')" class="btn-outline">Resume</button>'
         + '<button ' + dis + 'onclick="confirmStopEncoded(\'' + enc + '\')" class="btn-danger">Stop</button>'
         + '<button ' + (lightPending?'disabled ':'') + dis + 'onclick="toggleLightEncoded(\'' + enc + '\')" class="' + lightCls + '">' + lightHtml + '</button>'
-        + '<button onclick="toggleCamera(\'' + enc + '\')" class="btn-outline"><i class="fas fa-camera mr-1"></i>Camera</button>'
+        + '<button onclick="toggleCamera(\'' + enc + '\')" class="btn-outline cam-btn">' + (cameraLoading.has(enc) ? '<i class="fas fa-circle-notch fa-spin mr-1"></i>' : '<i class="fas fa-camera mr-1"></i>') + 'Camera</button>'
         + (isBambu
             ? '<button onclick="toggleSpeed(\'' + enc + '\')" class="btn-outline"><i class="fas fa-gauge-high mr-1"></i>Speed</button>'
               + (advancedMode ? '<button onclick="toggleGcode(\'' + enc + '\')" class="btn-outline"><i class="fas fa-terminal mr-1"></i>GCode</button>' : '')
@@ -951,8 +961,24 @@ function toggleCamera(enc) {
     const panel = document.getElementById('cam-' + enc);
     if (!panel) return;
     const img = panel.querySelector('img');
-    if (panel.classList.contains('hidden')) { panel.classList.remove('hidden'); if(img) img.src='/api/camera/'+enc; }
-    else { panel.classList.add('hidden'); if(img) img.src=''; }
+    if (panel.classList.contains('hidden')) {
+        panel.classList.remove('hidden');
+        cameraLoading.add(enc);
+        const btn = document.querySelector('#pcard-' + enc + ' .cam-btn');
+        if (btn) btn.innerHTML = '<i class="fas fa-circle-notch fa-spin mr-1"></i>Camera';
+        if (img) {
+            img.onload = img.onerror = () => {
+                cameraLoading.delete(enc);
+                const b = document.querySelector('#pcard-' + enc + ' .cam-btn');
+                if (b) b.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
+            };
+            img.src = '/api/camera/' + enc;
+        }
+    } else {
+        cameraLoading.delete(enc);
+        panel.classList.add('hidden');
+        if (img) { img.onload = img.onerror = null; img.src = ''; }
+    }
 }
 
 // ── Speed panel ───────────────────────────────────────────────────────────────
