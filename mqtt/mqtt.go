@@ -784,6 +784,7 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 				NozzleTemp: pr.NozzleTemper,
 				BedTemp:    pr.BedTemper,
 			}
+			sessionMu.Unlock()
 		} else if prev.Status == "printing" && status != "printing" && sess != nil {
 			now := time.Now().Unix()
 			result := status
