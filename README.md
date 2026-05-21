@@ -11,6 +11,10 @@ Among many other tools, AI was used to develop this program. If you have a probl
 
 ---
 
+<img width="2519" height="1255" alt="screenshot-2026-05-21_16-45-12" src="https://github.com/user-attachments/assets/3b25ea5a-f462-459b-b5b3-6c7a5244bb86" />
+
+---
+
 ## Features
 
 - Live status for Bambu Lab and Klipper/Moonraker printers
