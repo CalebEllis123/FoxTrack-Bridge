@@ -9,8 +9,6 @@ FoxTrack Bridge is a local 3D printer dashboard and integration server. It runs 
 
 Among many other tools, AI was used to develop this program. If you have a problem with that, you may look for alternative programs made by people with more time or contribute human-made code.
 
----
-
 <img width="2519" height="1255" alt="screenshot-2026-05-21_16-45-12" src="https://github.com/user-attachments/assets/3b25ea5a-f462-459b-b5b3-6c7a5244bb86" />
 
 ---
