@@ -15,4 +15,6 @@ vendor/
 .DS_Store
 Thumbs.db
 foxtrack-bridge-linux
-foxtrack-bridge-linux
+
+# Logs
+build.log

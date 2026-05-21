@@ -8,6 +8,9 @@ import (
 // AppVersion is injected at build time via -ldflags.
 var AppVersion = "dev"
 
+// AppBuildVariant is injected at build time. Value is "headless" for headless builds, "" for GUI builds.
+var AppBuildVariant = ""
+
 func Normalized(v string) string {
 	v = strings.TrimSpace(v)
 	v = strings.TrimPrefix(v, "v")

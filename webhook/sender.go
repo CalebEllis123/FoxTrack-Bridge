@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// URL is the FoxTrack primary telemetry endpoint. Same for all users — do not expose in UI or config.
+const URL = "https://vcnedcbtnhpmjgneahyk.supabase.co/functions/v1/bambu-local-relay"
+
+// SyncURL is the FoxTrack printer registration endpoint, called on bridge startup.
+const SyncURL = "https://vcnedcbtnhpmjgneahyk.supabase.co/functions/v1/bambu-local-sync"
+
 var relayHTTPClient = &http.Client{Timeout: 10 * time.Second}
 
 // Payload is the JSON body sent to FoxTrack on every status change.
@@ -71,6 +77,48 @@ func Send(apiKey, webhookURL string, p Payload) error {
 	}
 
 	log.Printf("[webhook] Sent status for %s → %s (%d%%)", p.PrinterName, p.Status, p.Progress)
+	return nil
+}
+
+// HistoryPayload is sent to FoxTrack when a print job completes.
+type HistoryPayload struct {
+	Type        string  `json:"type"` // always "print_complete"
+	PrinterName string  `json:"printer_name"`
+	Serial      string  `json:"serial"`
+	FileName    string  `json:"file_name"`
+	NozzleTemp  float64 `json:"nozzle_temp"`
+	BedTemp     float64 `json:"bed_temp"`
+	StartTime   int64   `json:"start_time"`
+	EndTime     int64   `json:"end_time"`
+	Duration    int64   `json:"duration"` // seconds
+	Result      string  `json:"result"`   // "finished" | "cancelled" | "error"
+	Timestamp   int64   `json:"timestamp"`
+}
+
+// SendHistory posts a HistoryPayload to the FoxTrack webhook URL.
+func SendHistory(apiKey, webhookURL string, p HistoryPayload) error {
+	body, err := json.Marshal(p)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest("POST", webhookURL, bytes.NewBuffer(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := relayHTTPClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("FoxTrack history webhook returned HTTP %d", resp.StatusCode)
+	}
+
+	log.Printf("[history] Sent print_complete for %s (%s)", p.PrinterName, p.Result)
 	return nil
 }
 

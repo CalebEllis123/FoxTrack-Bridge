@@ -8,9 +8,8 @@ import (
 )
 
 type Config struct {
-	APIKey     string    `json:"api_key"`
-	WebhookURL string    `json:"webhook_url"`
-	Printers   []Printer `json:"printers"`
+	APIKey   string    `json:"api_key"`
+	Printers []Printer `json:"printers"`
 }
 
 type Printer struct {
@@ -64,6 +63,16 @@ func LoadConfig() (*Config, error) {
 	_ = SaveConfig(&cfg)
 
 	return &cfg, nil
+}
+
+// ConfigDir returns the directory where FoxTrack Bridge stores its data files.
+func ConfigDir() string {
+	base, err := os.UserConfigDir()
+	if err != nil || base == "" {
+		exe, _ := os.Executable()
+		return filepath.Join(filepath.Dir(exe), "config")
+	}
+	return filepath.Join(base, "FoxTrack-Bridge")
 }
 
 func SaveConfig(cfg *Config) error {

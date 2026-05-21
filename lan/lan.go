@@ -13,15 +13,25 @@ import (
 	"time"
 
 	configpkg "foxtrack-bridge/config"
+	"foxtrack-bridge/history"
 	mqttpkg "foxtrack-bridge/mqtt"
 	"foxtrack-bridge/webhook"
 )
+
+type printSession struct {
+	StartTime  int64
+	FileName   string
+	NozzleTemp float64
+	BedTemp    float64
+}
 
 type Controller struct {
 	mu        sync.RWMutex
 	states    map[string]*mqttpkg.TelemetryData
 	printers  map[string]configpkg.Printer
 	cancelers map[string]chan struct{}
+	sessionMu sync.Mutex
+	sessions  map[string]*printSession
 }
 
 func NewController() *Controller {
@@ -29,17 +39,18 @@ func NewController() *Controller {
 		states:    map[string]*mqttpkg.TelemetryData{},
 		printers:  map[string]configpkg.Printer{},
 		cancelers: map[string]chan struct{}{},
+		sessions:  map[string]*printSession{},
 	}
 }
 
-func (c *Controller) SyncPrinters(printers []configpkg.Printer, webhookURL, foxAPIKey string) {
+func (c *Controller) SyncPrinters(printers []configpkg.Printer, foxAPIKey string) {
 	keep := make(map[string]bool)
 	for _, p := range printers {
 		if isBambuPrinter(p) || strings.TrimSpace(p.MoonrakerURL) == "" {
 			continue
 		}
 		keep[p.Name] = true
-		c.AddOrUpdatePrinter(p, webhookURL, foxAPIKey)
+		c.AddOrUpdatePrinter(p, foxAPIKey)
 	}
 
 	c.mu.Lock()
@@ -54,7 +65,7 @@ func (c *Controller) SyncPrinters(printers []configpkg.Printer, webhookURL, foxA
 	c.mu.Unlock()
 }
 
-func (c *Controller) AddOrUpdatePrinter(p configpkg.Printer, webhookURL, foxAPIKey string) {
+func (c *Controller) AddOrUpdatePrinter(p configpkg.Printer, foxAPIKey string) {
 	if p.Name == "" {
 		return
 	}
@@ -72,7 +83,7 @@ func (c *Controller) AddOrUpdatePrinter(p configpkg.Printer, webhookURL, foxAPIK
 	c.printers[p.Name] = p
 	c.mu.Unlock()
 
-	go c.pollLoop(p, webhookURL, foxAPIKey, stop)
+	go c.pollLoop(p, foxAPIKey, stop)
 }
 
 func (c *Controller) RemovePrinter(name string) {
@@ -150,7 +161,7 @@ func (c *Controller) ProxyCamera(w http.ResponseWriter, _ *http.Request, name st
 	return fmt.Errorf("camera unavailable")
 }
 
-func (c *Controller) pollLoop(p configpkg.Printer, webhookURL, foxAPIKey string, stop <-chan struct{}) {
+func (c *Controller) pollLoop(p configpkg.Printer, foxAPIKey string, stop <-chan struct{}) {
 	ticker := time.NewTicker(5 * time.Second)
 	defer ticker.Stop()
 
@@ -169,12 +180,55 @@ func (c *Controller) pollLoop(p configpkg.Printer, webhookURL, foxAPIKey string,
 		t.PrinterID = p.Name
 		t.Timestamp = time.Now().Unix()
 
+		// Capture previous state before overwriting, then detect print transitions.
 		c.mu.Lock()
+		prev := c.states[p.Name]
+		prevStatus := ""
+		if prev != nil {
+			prevStatus = prev.Status
+		}
 		c.states[p.Name] = &t
 		c.mu.Unlock()
 
-		if webhookURL != "" && foxAPIKey != "" && err == nil {
-			if err := webhook.SendRelay(foxAPIKey, webhookURL, p.MoonrakerURL, p.Name, relayPayload); err != nil {
+		c.sessionMu.Lock()
+		sess := c.sessions[p.Name]
+		if prevStatus != "printing" && t.Status == "printing" {
+			c.sessions[p.Name] = &printSession{
+				StartTime:  time.Now().Unix(),
+				FileName:   t.FileName,
+				NozzleTemp: t.NozzleTemp,
+				BedTemp:    t.BedTemp,
+			}
+			c.sessionMu.Unlock()
+		} else if prevStatus == "printing" && t.Status != "printing" && sess != nil {
+			now := time.Now().Unix()
+			result := t.Status
+			if result != "finished" && result != "error" {
+				result = "cancelled"
+			}
+			rec := history.Record{
+				PrinterName: p.Name,
+				FileName:    sess.FileName,
+				NozzleTemp:  sess.NozzleTemp,
+				BedTemp:     sess.BedTemp,
+				StartTime:   sess.StartTime,
+				EndTime:     now,
+				Duration:    now - sess.StartTime,
+				Result:      result,
+			}
+			delete(c.sessions, p.Name)
+			c.sessionMu.Unlock()
+			go func() {
+				if err := history.Append(rec); err != nil {
+					log.Printf("[%s] history write error: %v", p.Name, err)
+				}
+			}()
+		} else {
+			c.sessionMu.Unlock()
+		}
+
+		if foxAPIKey != "" && err == nil && shouldSendWebhook(prev, &t) {
+			if err := webhook.SendRelay(foxAPIKey, webhook.URL, p.Name, p.Name, relayPayload); err != nil {
 				log.Printf("[%s] webhook error: %v", p.Name, err)
 			}
 		}

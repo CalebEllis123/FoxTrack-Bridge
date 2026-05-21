@@ -42,6 +42,37 @@ jobs:
             goarch: amd64
             asset: FoxTrack-Bridge-Linux
 
+          - os: linux-arm64
+            runner: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            asset: FoxTrack-Bridge-Linux-ARM64
+
+          - os: linux-arm32
+            runner: ubuntu-latest
+            goos: linux
+            goarch: arm
+            goarm: "6"
+            asset: FoxTrack-Bridge-Linux-ARM32
+
+          - os: windows-headless
+            runner: windows-latest
+            goos: windows
+            goarch: amd64
+            asset: FoxTrack-Bridge-Windows-Headless.exe
+
+          - os: macos-intel-headless
+            runner: macos-latest
+            goos: darwin
+            goarch: amd64
+            asset: FoxTrack-Bridge-macOS-Intel-Headless
+
+          - os: macos-arm-headless
+            runner: macos-latest
+            goos: darwin
+            goarch: arm64
+            asset: FoxTrack-Bridge-macOS-Apple-Silicon-Headless
+
     steps:
       - uses: actions/checkout@v4
 
@@ -58,13 +89,15 @@ jobs:
           echo "app_version=${CLEAN}" >> "$GITHUB_OUTPUT"
 
       - name: Install Linux system dependencies
-        if: matrix.goos == 'linux'
+        if: matrix.os == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y --fix-missing gcc
 
-      - name: Build (Windows)
-        if: matrix.goos == 'windows'
+      # --- GUI builds (systray, CGO enabled) ---
+
+      - name: Build (Windows GUI)
+        if: matrix.os == 'windows'
         env:
           GOOS: windows
           GOARCH: amd64
@@ -73,8 +106,8 @@ jobs:
         shell: pwsh
         run: go build -ldflags="-s -w -H windowsgui -X foxtrack-bridge/version.AppVersion=$env:APP_VERSION" -o FoxTrack-Bridge-Windows.exe .
 
-      - name: Build (macOS)
-        if: matrix.goos == 'darwin'
+      - name: Build (macOS GUI)
+        if: matrix.os == 'macos-intel' || matrix.os == 'macos-arm'
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
@@ -83,7 +116,6 @@ jobs:
         run: |
           go build -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=${APP_VERSION}" -o foxtrack-bridge-bin .
 
-          # Build .app bundle
           APP_DIR="FoxTrack Bridge.app"
           mkdir -p "$APP_DIR/Contents/MacOS"
           mkdir -p "$APP_DIR/Contents/Resources"
@@ -118,20 +150,57 @@ jobs:
           </plist>
           PLIST
 
-          # Ad-hoc sign
           codesign --deep --force --sign "-" "$APP_DIR"
-
-          # Zip preserving permissions
           zip -r "${{ matrix.asset }}" "$APP_DIR" --quiet
 
-      - name: Build (Linux)
-        if: matrix.goos == 'linux'
+      # --- Headless builds (no systray, CGO disabled) ---
+
+      - name: Build (Linux amd64)
+        if: matrix.os == 'linux'
         env:
           GOOS: linux
           GOARCH: amd64
           CGO_ENABLED: 1
           APP_VERSION: ${{ steps.version.outputs.app_version }}
-        run: go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=${APP_VERSION}" -o FoxTrack-Bridge-Linux .
+        run: go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=${APP_VERSION} -X foxtrack-bridge/version.AppBuildVariant=headless" -o FoxTrack-Bridge-Linux .
+
+      - name: Build (Linux ARM64)
+        if: matrix.os == 'linux-arm64'
+        env:
+          GOOS: linux
+          GOARCH: arm64
+          CGO_ENABLED: 0
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=${APP_VERSION} -X foxtrack-bridge/version.AppBuildVariant=headless" -o FoxTrack-Bridge-Linux-ARM64 .
+
+      - name: Build (Linux ARM32)
+        if: matrix.os == 'linux-arm32'
+        env:
+          GOOS: linux
+          GOARCH: arm
+          GOARM: ${{ matrix.goarm }}
+          CGO_ENABLED: 0
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=${APP_VERSION} -X foxtrack-bridge/version.AppBuildVariant=headless" -o FoxTrack-Bridge-Linux-ARM32 .
+
+      - name: Build (Windows Headless)
+        if: matrix.os == 'windows-headless'
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          CGO_ENABLED: 0
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        shell: pwsh
+        run: go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=$env:APP_VERSION -X foxtrack-bridge/version.AppBuildVariant=headless" -o FoxTrack-Bridge-Windows-Headless.exe .
+
+      - name: Build (macOS Headless)
+        if: matrix.os == 'macos-intel-headless' || matrix.os == 'macos-arm-headless'
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=${APP_VERSION} -X foxtrack-bridge/version.AppBuildVariant=headless" -o ${{ matrix.asset }} .
 
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2

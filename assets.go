@@ -2,8 +2,8 @@ package main
 
 import _ "embed"
 
-//go:embed ui.html
+//go:embed web/ui.html
 var uiHTML []byte
 
-//go:embed logo.png
+//go:embed assets/logo.png
 var logoPNG []byte

@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
@@ -19,6 +18,7 @@ import (
 	"time"
 
 	"foxtrack-bridge/config"
+	"foxtrack-bridge/history"
 	"foxtrack-bridge/lan"
 	mqttpkg "foxtrack-bridge/mqtt"
 	"foxtrack-bridge/update"
@@ -86,29 +86,68 @@ func StartServer() {
 
 	syncPrinterConnections(cfg)
 
-	// On startup, tell Supabase which serials are currently configured.
-	// Any bridge_printers rows for this token that aren't in the list get deleted.
-	go syncPrintersToSupabase(cfg)
-
 	http.HandleFunc("/", handleRoot)
 	http.HandleFunc("/logo.png", handleLogo)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/printers", handlePrinters)
 	http.HandleFunc("/api/printers/", handlePrinterByName) // DELETE /api/printers/{name}
-	http.HandleFunc("/api/sync", handleSync)               // POST — FoxTrack sends current printer list
 	http.HandleFunc("/api/status", handleStatus)
 	http.HandleFunc("/api/version", handleVersion)
 	http.HandleFunc("/api/update/check", handleUpdateCheck)
 	http.HandleFunc("/api/update/install", handleUpdateInstall)
 	http.HandleFunc("/api/update/restart", handleUpdateRestart)
 	http.HandleFunc("/api/test", handleTest)
-	http.HandleFunc("/api/control/", handleControl) // /api/control/{name}/{command}
-	http.HandleFunc("/api/camera/", handleCamera)   // /api/camera/{name}
-	http.HandleFunc("/api/logs", handleLogs)        // GET — SSE log stream
+	http.HandleFunc("/api/control/", handleControl)          // /api/control/{name}/{command}
+	http.HandleFunc("/api/camera/", handleCamera)            // /api/camera/{name}
+	http.HandleFunc("/api/logs", handleLogs)                 // GET — SSE log stream
+	http.HandleFunc("/api/history", handleHistory)           // GET all history records
+	http.HandleFunc("/api/history/", handleHistoryByPrinter) // GET /api/history/{name}
 
-	fmt.Println("FoxTrack Bridge running at http://localhost:8080")
+	printStartupBanner()
 	if err := http.ListenAndServe(":8080", nil); err != nil {
 		log.Printf("Server error: %v", err)
+	}
+}
+
+var privateRanges = []net.IPNet{
+	{IP: net.ParseIP("10.0.0.0"), Mask: net.CIDRMask(8, 32)},
+	{IP: net.ParseIP("172.16.0.0"), Mask: net.CIDRMask(12, 32)},
+	{IP: net.ParseIP("192.168.0.0"), Mask: net.CIDRMask(16, 32)},
+}
+
+func isPrivateIP(ip net.IP) bool {
+	for _, r := range privateRanges {
+		if r.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func printStartupBanner() {
+	log.Println("FoxTrack Bridge is running. Open in your browser:")
+	log.Println("  http://localhost:8080")
+	ifaces, err := net.Interfaces()
+	if err == nil {
+		for _, iface := range ifaces {
+			if iface.Flags&net.FlagLoopback != 0 || iface.Flags&net.FlagUp == 0 {
+				continue
+			}
+			addrs, _ := iface.Addrs()
+			for _, addr := range addrs {
+				var ip net.IP
+				switch v := addr.(type) {
+				case *net.IPNet:
+					ip = v.IP
+				case *net.IPAddr:
+					ip = v.IP
+				}
+				if ip == nil || ip.IsLoopback() || ip.To4() == nil || !isPrivateIP(ip) {
+					continue
+				}
+				log.Printf("  http://%s:8080", ip.String())
+			}
+		}
 	}
 }
 
@@ -171,8 +210,7 @@ func mqttPrinter(p config.Printer, cfg *config.Config) mqttpkg.Printer {
 		IP:         p.IP,
 		Serial:     p.Serial,
 		LANCode:    p.LANCode,
-		WebhookURL: cfg.WebhookURL,
-		APIKey:     cfg.APIKey,
+		APIKey: cfg.APIKey,
 	}
 }
 
@@ -382,7 +420,17 @@ func handleCamera(w http.ResponseWriter, r *http.Request) {
 }
 
 // bambuCameraStream proxies a BambuLab printer camera using the proprietary binary
-// protocol on port 6000: TLS connect → JSON auth → continuous 16-byte-header JPEG frames.
+// protocol on port 6000.
+//
+// Auth: 80-byte binary struct (NOT JSON):
+//   [0:4]  = 0x40 (LE u32) — magic
+//   [4:8]  = 0x3000 (LE u32) — command
+//   [8:16] = 8 zero bytes — padding
+//   [16:48] = "bblp" NUL-padded to 32 bytes — username
+//   [48:80] = access_code NUL-padded to 32 bytes — password
+//
+// Each frame: 16-byte header where bytes [0:4] are the LE u32 JPEG payload size,
+// followed by that many bytes of JPEG data.
 func bambuCameraStream(w http.ResponseWriter, ip, lanCode, printerName string) {
 	conn, err := tls.DialWithDialer(
 		&net.Dialer{Timeout: 5 * time.Second},
@@ -397,24 +445,20 @@ func bambuCameraStream(w http.ResponseWriter, ip, lanCode, printerName string) {
 	}
 	defer conn.Close()
 
-	// Build auth JSON safely
-	authBytes, _ := json.Marshal(map[string]interface{}{
-		"doctype": "auth",
-		"content": map[string]string{"user": "bblp", "passwd": lanCode},
-	})
+	// 80-byte binary auth payload — not JSON.
+	auth := make([]byte, 80)
+	binary.LittleEndian.PutUint32(auth[0:4], 0x40)   // magic
+	binary.LittleEndian.PutUint32(auth[4:8], 0x3000) // command
+	// bytes [8:16] remain zero — padding
+	copy(auth[16:48], []byte("bblp"))     // username field, NUL-padded to 32 bytes
+	copy(auth[48:80], []byte(lanCode))    // password field, NUL-padded to 32 bytes
 
-	// Send auth within 5 s
 	conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err := conn.Write(append(authBytes, '\n')); err != nil {
+	if _, err := conn.Write(auth); err != nil {
 		log.Printf("[camera/%s] auth write: %v", printerName, err)
 		http.Error(w, "camera unavailable", http.StatusBadGateway)
 		return
 	}
-
-	// Discard auth response (newline-terminated JSON) — 2 s timeout
-	reader := bufio.NewReader(conn)
-	conn.SetDeadline(time.Now().Add(2 * time.Second))
-	reader.ReadString('\n') // ignore error — some firmware omits the response
 	conn.SetDeadline(time.Time{})
 
 	// Start MJPEG response
@@ -425,15 +469,16 @@ func bambuCameraStream(w http.ResponseWriter, ip, lanCode, printerName string) {
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 
+	reader := bufio.NewReader(conn)
 	hdr := make([]byte, 16)
 	for {
-		// Each frame: 16-byte header (bytes 4-7 = little-endian payload size) + JPEG bytes
+		// 16-byte frame header: bytes [0:4] = LE u32 JPEG payload size.
 		if _, err := io.ReadFull(reader, hdr); err != nil {
 			log.Printf("[camera/%s] header read: %v", printerName, err)
 			return
 		}
-		frameSize := binary.LittleEndian.Uint32(hdr[4:8])
-		if frameSize == 0 || frameSize > 5<<20 {
+		frameSize := binary.LittleEndian.Uint32(hdr[0:4])
+		if frameSize == 0 || frameSize > 10<<20 {
 			log.Printf("[camera/%s] invalid frame size %d", printerName, frameSize)
 			return
 		}
@@ -442,7 +487,10 @@ func bambuCameraStream(w http.ResponseWriter, ip, lanCode, printerName string) {
 			log.Printf("[camera/%s] frame read: %v", printerName, err)
 			return
 		}
-		// Write multipart MJPEG boundary
+		// Skip non-JPEG payloads (some frames are metadata, not images).
+		if frameSize < 2 || frame[0] != 0xFF || frame[1] != 0xD8 {
+			continue
+		}
 		fmt.Fprintf(w, "--%s\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", boundary, frameSize)
 		if _, err := w.Write(frame); err != nil {
 			return // client disconnected
@@ -470,28 +518,37 @@ func handleTest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	address := ""
+	reachable := false
+	detail := ""
+
 	if strings.TrimSpace(req.MoonrakerURL) != "" {
-		u, err := url.Parse(req.MoonrakerURL)
-		if err != nil || u.Host == "" {
-			http.Error(w, "invalid moonraker_url", http.StatusBadRequest)
-			return
-		}
-		address = u.Host
-		if !strings.Contains(address, ":") {
-			address = net.JoinHostPort(address, "7125")
+		// Klipper: hit Moonraker's /printer/info endpoint.
+		infoURL := strings.TrimRight(req.MoonrakerURL, "/") + "/printer/info"
+		client := &http.Client{Timeout: 5 * time.Second}
+		resp, err := client.Get(infoURL)
+		if err != nil {
+			detail = err.Error()
+		} else {
+			resp.Body.Close()
+			reachable = resp.StatusCode < 500
 		}
 	} else {
-		address = net.JoinHostPort(req.IP, "8883")
+		// Bambu: TCP reachability on MQTT port.
+		address := net.JoinHostPort(strings.TrimSpace(req.IP), "8883")
+		conn, err := net.DialTimeout("tcp", address, 5*time.Second)
+		if err != nil {
+			detail = err.Error()
+		} else {
+			conn.Close()
+			reachable = true
+		}
 	}
 
-	conn, err := net.DialTimeout("tcp", address, 5*time.Second)
-	reachable := err == nil
-	if conn != nil {
-		conn.Close()
+	resp := map[string]interface{}{"reachable": reachable}
+	if detail != "" {
+		resp["detail"] = detail
 	}
-
-	json.NewEncoder(w).Encode(map[string]bool{"reachable": reachable})
+	json.NewEncoder(w).Encode(resp)
 }
 
 func handleConfig(w http.ResponseWriter, r *http.Request) {
@@ -548,7 +605,7 @@ func handlePrinters(w http.ResponseWriter, r *http.Request) {
 		if isBambuPrinterConfig(p) {
 			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
 		} else {
-			lanCtrl.AddOrUpdatePrinter(p, cfg.WebhookURL, cfg.APIKey)
+			lanCtrl.AddOrUpdatePrinter(p, cfg.APIKey)
 			log.Printf("[%s] connected via Moonraker", p.Name)
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -587,84 +644,13 @@ func handlePrinterByName(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-// handleSync receives the current printer list from FoxTrack and removes
-// any local printers that are no longer in the list.
-func handleSync(w http.ResponseWriter, r *http.Request) {
-	cors(w)
-	if r.Method == "OPTIONS" {
-		return
-	}
-	if r.Method != "POST" {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		Serials []string `json:"serials"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	keep := make(map[string]bool)
-	for _, s := range req.Serials {
-		keep[s] = true
-	}
-	configMutex.Lock()
-	printers := configStore.Printers[:0]
-	for _, p := range configStore.Printers {
-		if keep[p.Serial] {
-			printers = append(printers, p)
-		}
-	}
-	configStore.Printers = printers
-	cfg := configStore
-	configMutex.Unlock()
-	_ = config.SaveConfig(cfg)
-	lanCtrl.SyncPrinters(cfg.Printers, cfg.WebhookURL, cfg.APIKey)
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-}
-
-// syncPrintersToSupabase POSTs the current serial list to the relay so it can
-// delete any stale bridge_printers rows for this API token.
-func syncPrintersToSupabase(cfg *config.Config) {
-	if cfg.WebhookURL == "" || cfg.APIKey == "" {
-		return
-	}
-	serials := make([]string, 0, len(cfg.Printers))
-	for _, p := range cfg.Printers {
-		serials = append(serials, p.Serial)
-	}
-
-	// Derive the sync URL from the webhook URL
-	// webhook: .../bambu-local-relay  →  sync: .../bambu-local-sync
-	syncURL := strings.Replace(cfg.WebhookURL, "bambu-local-relay", "bambu-local-sync", 1)
-
-	body, _ := json.Marshal(map[string]interface{}{"serials": serials})
-	req, err := http.NewRequest("POST", syncURL, bytes.NewBuffer(body))
-	if err != nil {
-		log.Printf("[sync] failed to build request: %v", err)
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+cfg.APIKey)
-
-	client := &http.Client{Timeout: 10 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[sync] failed: %v", err)
-		return
-	}
-	defer resp.Body.Close()
-	log.Printf("[sync] startup sync complete — %d printers registered", len(serials))
-}
-
 func syncPrinterConnections(cfg *config.Config) {
 	for _, p := range cfg.Printers {
 		if isBambuPrinterConfig(p) {
 			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
 		}
 	}
-	lanCtrl.SyncPrinters(cfg.Printers, cfg.WebhookURL, cfg.APIKey)
+	lanCtrl.SyncPrinters(cfg.Printers, cfg.APIKey)
 }
 
 func printerIsBambu(name string) bool {
@@ -677,6 +663,55 @@ func printerIsBambu(name string) bool {
 	}
 	return false
 }
+
+// handleHistory returns all print history records as JSON.
+func handleHistory(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	records, err := history.Load()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"records": records})
+}
+
+// handleHistoryByPrinter returns print history for a single printer.
+// URL: /api/history/{printerName}
+func handleHistoryByPrinter(w http.ResponseWriter, r *http.Request) {
+	cors(w)
+	if r.Method == "OPTIONS" {
+		return
+	}
+	if r.Method != "GET" {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	name := strings.TrimPrefix(r.URL.Path, "/api/history/")
+	name = strings.TrimSuffix(name, "/")
+	if decoded, err := url.PathUnescape(name); err == nil {
+		name = decoded
+	}
+	if name == "" {
+		http.Error(w, "missing printer name", http.StatusBadRequest)
+		return
+	}
+	records, err := history.ForPrinter(name)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": err.Error()})
+		return
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"records": records})
+}
+
 
 func isBambuPrinterConfig(p config.Printer) bool {
 	if strings.TrimSpace(p.Serial) == "" {

@@ -1,91 +1,156 @@
-## FoxTrack Bridge
+# FoxTrack Bridge
 
-FoxTrack Bridge runs on the same local network as your printer and sends printer data to FoxTrack (https://foxtrack.studio/).
+![GitHub release](https://img.shields.io/github/v/release/FoxesRCool1/FoxTrack-Bridge)
+![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue)
+![License](https://img.shields.io/github/license/FoxesRCool1/FoxTrack-Bridge)
 
-<img width="1877" height="899" alt="screenshot-2026-04-21_15-43-47" src="https://github.com/user-attachments/assets/6e4efe37-e0eb-4be4-ac98-4c042312bfa4" />
+FoxTrack Bridge is a local 3D printer dashboard and integration server. It runs on any machine on the same network as your printers and gives you a real-time web dashboard for monitoring status, live camera feeds, print history, and basic printer controls. It also connects to [FoxTrack](https://foxtrack.studio/) so you can monitor your printers from anywhere.
 
-Today the Bridge supports Bambu Lab local LAN access and Klipper printers through the Moonraker HTTP API.
+### A note on AI
 
-## What it does
+Among many other tools, AI was used to develop this program. If you have a problem with that, you may look for alternative programs made by people with more time or contribute human-made code.
 
-- Connects local printers to FoxTrack with your FoxTrack API token
-- Shows printer status, current file, progress, temperatures, light state, and time remaining
-- Sends telemetry to FoxTrack through the configured webhook
-- Exposes local controls for supported printers: pause, resume, stop, light toggle, camera preview, and start print
-- Opens a local dashboard at `http://localhost:8080`
+---
 
-## Current support
+## Features
 
-- Bambu Lab: supported
-- Klipper (Moonraker): supported
+- Live status for Bambu Lab and Klipper/Moonraker printers
+- Print progress, temperatures, elapsed time, and ETA
+- Live camera feed from printers & light toggle
+- AMS filament slot display with slot colors and material types (Bambu Lab only)
+- Print speed selector: Silent / Standard / Sport / Ludicrous (Bambu Lab only)
+- Browser push notifications when prints finish, fail, or are paused
+- Print history locally stored and available via the History view
+- Automatic updates with staged installation
+- Headless mode for servers, NAS devices, and Raspberry Pi
 
-## Downloads
+---
 
-Release builds are published for these targets only:
+## Supported Platforms
 
-- Windows x64
-- Windows Arm
-- macOS Apple Silicon
-- macOS Intel
-- Linux x64
+| Platform | Notes |
+|---|---|
+| Windows x64 | 
+| macOS Apple Silicon |
+| macOS Intel |
+| Linux x64 |
+| Linux ARM (Headless) | Open `http://<ip>:8080` from any device on the network |
 
-Get the latest build from the GitHub releases page:
+Download the latest builds from the [GitHub releases page](https://github.com/FoxesRCool1/FoxTrack-Bridge/releases/latest).
 
-- https://github.com/FoxesRCool1/FoxTrack-Bridge/releases/latest
+---
 
-## Setup
+## Quick Start
 
-### 1. In FoxTrack
+**1. Run the Bridge**
 
-- Open `Settings > Integrations > 3D Printer Integration`
-- Copy your API token
+Download the binary for your platform and launch it. The system tray icon appears on Windows, macOS, and Linux x64. On the Linux ARM build, run the binary from a terminal — the startup output lists the local addresses where the dashboard is available.
 
-### 2. On the machine running the Bridge
+**2. Open the dashboard**
 
-- Download the correct build for your operating system
-- Launch the app
-- Open `http://localhost:8080` if the dashboard does not open automatically
+Navigate to [http://localhost:8080](http://localhost:8080) in your browser. From other devices on the same network, use the IP address shown in the startup output (e.g. `http://192.168.1.100:8080`).
 
-### 3. Add your printer
+**3. Connect to FoxTrack (optional)**
 
-For Bambu Lab:
+In Settings, paste your FoxTrack API key and click Save. Get your key from [FoxTrack Settings > Integrations](https://foxtrack.studio/settings).
 
-- Put the printer in LAN Only Mode
-- Enable Developer Mode
-- Find the printer IP address
-- Find the Serial Number (Visible in BambuStudio > Devices > Update)
-- Find the LAN Access Code
-- Enter those values into the Bridge dashboard
+**4. Add a printer**
 
-For Klipper (Moonraker):
+In Printers, click "Add Printer", select the printer type, fill in the required fields, and click Connect.
 
-- Use your Moonraker URL (typically `http://printer-ip:7125`)
-- Add an API key only if Moonraker authentication is enabled
+---
 
-## Notes about controls
+## Adding Printers
 
-- Pause, resume, stop, and camera preview are available for configured printers
-- Start print is available as an advanced action and currently expects a printer-accessible file path or URL
-- If a start command fails, the file path or printer firmware behavior is the first thing to check
+### Bambu Lab
 
-## Development
+1. On the printer touchscreen, enable **LAN Only Mode** under Network settings.
+2. Enable **Developer Mode** under About.
+3. Note the **IP address**, **Serial Number**, and **LAN Access Code** (shown on the screen after enabling LAN Only Mode).
+4. In the Bridge dashboard under Settings, select **Bambu Lab**, enter those values, and click Connect.
 
-The normal app uses a system tray.
+### Klipper / Moonraker
 
-For environments that cannot compile tray dependencies, there is also a headless dev build mode:
+1. Find your Moonraker URL — usually `http://192.168.x.x:7125`.
+2. In the Bridge dashboard under Settings, select **Klipper / Moonraker**, enter the URL, and click Connect.
+3. If Moonraker has authentication enabled, also provide the Moonraker API key.
 
-```bash
-go build -tags headless .
+---
+
+## Print History
+
+The Bridge tracks each print job from start to finish. When a job completes, is cancelled, or ends in an error, a record is saved to `~/.config/FoxTrack-Bridge/history.json` and sent to FoxTrack.
+
+Each record includes: printer name, file name, nozzle temperature, bed temperature, start time, end time, duration, and result.
+
+View history in the dashboard by clicking **History** in the sidebar. Summary statistics (total prints, success rate, total print hours) appear at the top of the History view. Use **Export CSV** to download the full log.
+
+History is also accessible via the local API:
+
+```
+GET http://localhost:8080/api/history
+GET http://localhost:8080/api/history/{printer_name}
 ```
 
-Headless builds start the local web server without the tray UI.
+---
 
-## Build targets
+## Raspberry Pi
 
-The project is configured to build only these release targets:
+The Linux ARM build is designed for single-board computers — no display or desktop environment is required.
 
-- Windows x64
-- Windows Arm64
-- macOS Apple Silicon
-- macOS Intel
-- Linux x64
+**Quick install:**
+
+```bash
+chmod +x FoxTrack-Bridge-Linux-ARM
+./FoxTrack-Bridge-Linux-ARM
+```
+
+The startup output lists the local IP addresses where the dashboard is available from other devices.
+
+**Run as a background service:**
+
+A systemd unit file is included in the repository at `linux/foxtrack-bridge.service`. To install it:
+
+```bash
+# Copy the binary to /usr/local/bin
+sudo cp FoxTrack-Bridge-Linux-ARM /usr/local/bin/foxtrack-bridge
+
+# Copy the service file
+sudo cp linux/foxtrack-bridge.service /etc/systemd/system/
+
+# Enable and start the service
+sudo systemctl daemon-reload
+sudo systemctl enable --now foxtrack-bridge
+```
+
+The service restarts automatically on failure and starts on boot. The dashboard is available at `http://<raspberry-pi-ip>:8080` from any device on the same network.
+
+---
+
+## Building from Source
+
+Requires Go 1.24 or later.
+
+**Standard build (Windows, macOS, Linux x64):**
+
+```bash
+go build -ldflags="-s -w" -o foxtrack-bridge .
+```
+
+**Linux ARM (headless, no systray):**
+
+```bash
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags headless -ldflags="-s -w" -o foxtrack-bridge-arm .
+```
+
+**Run tests:**
+
+```bash
+go test ./...
+```
+
+---
+
+## License
+
+MIT License. See [LICENSE](LICENSE) for details.

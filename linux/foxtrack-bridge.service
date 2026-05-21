@@ -1,0 +1,14 @@
+[Unit]
+Description=FoxTrack Bridge — local 3D printer dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/foxtrack-bridge
+Restart=on-failure
+RestartSec=10
+User=%i
+
+[Install]
+WantedBy=multi-user.target

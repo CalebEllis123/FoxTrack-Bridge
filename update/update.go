@@ -22,7 +22,7 @@ import (
 )
 
 const (
-	repoOwner = "CalebEllis123"
+	repoOwner = "FoxesRCool1"
 	repoName  = "FoxTrack-Bridge"
 )
 
@@ -140,30 +140,43 @@ func fetchRelease(ctx context.Context) (*releaseResponse, error) {
 }
 
 func pickAsset(assets []releaseAsset) (Asset, bool) {
-	return pickAssetFor(assets, runtime.GOOS, runtime.GOARCH)
+	return pickAssetFor(assets, runtime.GOOS, runtime.GOARCH, version.AppBuildVariant)
 }
 
-func pickAssetFor(assets []releaseAsset, goos, goarch string) (Asset, bool) {
+func pickAssetFor(assets []releaseAsset, goos, goarch, buildVariant string) (Asset, bool) {
+	headless := buildVariant == "headless"
 	for _, a := range assets {
 		name := strings.ToLower(a.Name)
 		switch goos {
 		case "windows":
 			if goarch == "amd64" && strings.Contains(name, "windows") && strings.HasSuffix(name, ".exe") {
-				return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
-			}
-			if goarch == "arm64" && strings.Contains(name, "windows") && strings.Contains(name, "arm") && strings.HasSuffix(name, ".exe") {
-				return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
+				isHeadlessAsset := strings.Contains(name, "headless")
+				if headless == isHeadlessAsset {
+					return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
+				}
 			}
 		case "linux":
-			if goarch == "amd64" && strings.Contains(name, "linux") && !strings.HasSuffix(name, ".zip") {
+			if goarch == "arm64" && strings.Contains(name, "linux") && strings.Contains(name, "arm64") {
+				return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
+			}
+			if goarch == "arm" && strings.Contains(name, "linux") && strings.Contains(name, "arm32") {
+				return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
+			}
+			if goarch == "amd64" && strings.Contains(name, "linux") && !strings.Contains(name, "arm") && !strings.HasSuffix(name, ".zip") {
 				return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
 			}
 		case "darwin":
-			if goarch == "arm64" && strings.Contains(name, "macos") && strings.Contains(name, "apple-silicon") && strings.HasSuffix(name, ".zip") {
-				return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
+			if goarch == "arm64" && strings.Contains(name, "macos") && strings.Contains(name, "apple-silicon") {
+				isHeadlessAsset := !strings.HasSuffix(name, ".zip")
+				if headless == isHeadlessAsset {
+					return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
+				}
 			}
-			if goarch == "amd64" && strings.Contains(name, "macos") && strings.Contains(name, "intel") && strings.HasSuffix(name, ".zip") {
-				return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
+			if goarch == "amd64" && strings.Contains(name, "macos") && strings.Contains(name, "intel") {
+				isHeadlessAsset := !strings.HasSuffix(name, ".zip")
+				if headless == isHeadlessAsset {
+					return Asset{Name: a.Name, URL: a.BrowserDownloadURL}, true
+				}
 			}
 		}
 	}
