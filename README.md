@@ -77,23 +77,6 @@ In Printers, click "Add Printer", select the printer type, fill in the required 
 
 ---
 
-## Print History
-
-The Bridge tracks each print job from start to finish. When a job completes, is cancelled, or ends in an error, a record is saved to `~/.config/FoxTrack-Bridge/history.json` and sent to FoxTrack.
-
-Each record includes: printer name, file name, nozzle temperature, bed temperature, start time, end time, duration, and result.
-
-View history in the dashboard by clicking **History** in the sidebar. Summary statistics (total prints, success rate, total print hours) appear at the top of the History view. Use **Export CSV** to download the full log.
-
-History is also accessible via the local API:
-
-```
-GET http://localhost:8080/api/history
-GET http://localhost:8080/api/history/{printer_name}
-```
-
----
-
 ## Raspberry Pi
 
 The Linux ARM build is designed for single-board computers — no display or desktop environment is required.
