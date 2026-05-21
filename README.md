@@ -41,7 +41,7 @@ Download the latest builds from the [GitHub releases page](https://github.com/Fo
 
 ---
 
-## Support The Project
+## Support the Project
 
 If you are interested in supporting the development of this project, consider signing up to [FoxTrack](https://foxtrack.studio/)!
 
