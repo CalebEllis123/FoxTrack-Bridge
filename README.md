@@ -41,6 +41,14 @@ Download the latest builds from the [GitHub releases page](https://github.com/Fo
 
 ---
 
+## Support The Project
+
+If you are interested in supporting the development of this project, consider signing up to [FoxTrack](https://foxtrack.studio/)!
+
+Join our [Discord](https://discord.com/invite/3hd96AFYBf) to leave feedback.
+
+---
+
 ## Quick Start
 
 **1. Run the Bridge**
