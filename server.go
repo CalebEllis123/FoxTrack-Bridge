@@ -85,6 +85,7 @@ func StartServer() {
 	configMutex.Unlock()
 
 	syncPrinterConnections(cfg)
+	go autoUpdateLoop()
 
 	http.HandleFunc("/", handleRoot)
 	http.HandleFunc("/logo.png", handleLogo)
@@ -724,4 +725,47 @@ func isBambuPrinterConfig(p config.Printer) bool {
 		return false
 	}
 	return true
+}
+
+// autoUpdateLoop runs in the background and applies updates automatically when
+// the AutoUpdate setting is enabled. It waits 2 minutes on startup (so the
+// user has a chance to disable it if needed), then checks every hour.
+func autoUpdateLoop() {
+	time.Sleep(2 * time.Minute)
+	for {
+		configMutex.RLock()
+		enabled := configStore != nil && configStore.AutoUpdate
+		configMutex.RUnlock()
+
+		if enabled {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			result, err := update.CheckLatest(ctx)
+			cancel()
+			if err != nil {
+				log.Printf("[auto-update] check failed: %v", err)
+			} else if result.Available && result.CanAutoInstall {
+				log.Printf("[auto-update] new version %s available — downloading", result.LatestVersion)
+				ctx2, cancel2 := context.WithTimeout(context.Background(), 5*time.Minute)
+				err = update.StartInstall(ctx2)
+				cancel2()
+				if err != nil {
+					log.Printf("[auto-update] install failed: %v", err)
+				} else {
+					log.Printf("[auto-update] update staged — restarting to apply %s", result.LatestVersion)
+					if err := update.RestartToApply(); err != nil {
+						log.Printf("[auto-update] restart failed: %v", err)
+					} else {
+						time.Sleep(2 * time.Second)
+						os.Exit(0)
+					}
+				}
+			} else if !result.Available {
+				log.Printf("[auto-update] already up to date (%s)", result.CurrentVersion)
+			} else {
+				log.Printf("[auto-update] update available but cannot auto-install on this platform")
+			}
+		}
+
+		time.Sleep(1 * time.Hour)
+	}
 }

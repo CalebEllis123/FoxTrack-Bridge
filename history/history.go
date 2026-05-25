@@ -9,16 +9,24 @@ import (
 	"foxtrack-bridge/config"
 )
 
+// TempSample holds a single temperature reading taken during a print.
+type TempSample struct {
+	T          int64   `json:"t"`           // seconds elapsed since print start
+	NozzleTemp float64 `json:"nozzle_temp"`
+	BedTemp    float64 `json:"bed_temp"`
+}
+
 // Record captures a single completed print job.
 type Record struct {
-	PrinterName string  `json:"printer_name"`
-	FileName    string  `json:"file_name"`
-	NozzleTemp  float64 `json:"nozzle_temp"`
-	BedTemp     float64 `json:"bed_temp"`
-	StartTime   int64   `json:"start_time"` // Unix seconds
-	EndTime     int64   `json:"end_time"`
-	Duration    int64   `json:"duration"` // seconds
-	Result      string  `json:"result"`   // "finished" | "cancelled" | "error"
+	PrinterName string       `json:"printer_name"`
+	FileName    string       `json:"file_name"`
+	NozzleTemp  float64      `json:"nozzle_temp"`
+	BedTemp     float64      `json:"bed_temp"`
+	StartTime   int64        `json:"start_time"` // Unix seconds
+	EndTime     int64        `json:"end_time"`
+	Duration    int64        `json:"duration"` // seconds
+	Result      string       `json:"result"`   // "finished" | "cancelled" | "error"
+	TempSamples []TempSample `json:"temp_samples,omitempty"`
 }
 
 var mu sync.Mutex

@@ -16,6 +16,33 @@ import (
 	"foxtrack-bridge/webhook"
 )
 
+// flexInt unmarshals a JSON value that may arrive as either a number or a numeric string.
+// BambuLab firmware sends cooling_fan_speed as an int in telemetry but as a string in
+// upgrade_state messages, causing parse failures with a plain int field.
+type flexInt int
+
+func (f *flexInt) UnmarshalJSON(b []byte) error {
+	var n int
+	if err := json.Unmarshal(b, &n); err == nil {
+		*f = flexInt(n)
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(b, &s); err != nil {
+		return err
+	}
+	if s == "" {
+		*f = 0
+		return nil
+	}
+	n64, err := strconv.ParseInt(s, 10, 64)
+	if err != nil {
+		return err
+	}
+	*f = flexInt(n64)
+	return nil
+}
+
 type Printer struct {
 	Name    string
 	IP      string
@@ -33,20 +60,25 @@ type AmsSlot struct {
 }
 
 type TelemetryData struct {
-	Status        string    `json:"status"`
-	FileName      string    `json:"file_name"`
-	Progress      int       `json:"progress"`
-	Error         string    `json:"error"`
-	PrinterID     string    `json:"printer_id"`
-	Timestamp     int64     `json:"timestamp"`
-	NozzleTemp    float64   `json:"nozzle_temp"`
-	NozzleTarget  float64   `json:"nozzle_target"`
-	BedTemp       float64   `json:"bed_temp"`
-	BedTarget     float64   `json:"bed_target"`
-	LightOn       bool      `json:"light_on"`
-	TimeRemaining int       `json:"time_remaining"` // minutes
-	SpeedLevel    int       `json:"speed_level"`    // 1=Silent 2=Standard 3=Sport 4=Ludicrous
-	AMS           []AmsSlot `json:"ams,omitempty"`  // nil when no AMS
+	Status         string    `json:"status"`
+	FileName       string    `json:"file_name"`
+	Progress       int       `json:"progress"`
+	Error          string    `json:"error"`
+	PrinterID      string    `json:"printer_id"`
+	Timestamp      int64     `json:"timestamp"`
+	NozzleTemp     float64   `json:"nozzle_temp"`
+	NozzleTarget   float64   `json:"nozzle_target"`
+	BedTemp        float64   `json:"bed_temp"`
+	BedTarget      float64   `json:"bed_target"`
+	LightOn        bool      `json:"light_on"`
+	TimeRemaining  int       `json:"time_remaining"`            // minutes
+	SpeedLevel     int       `json:"speed_level"`               // 1=Silent 2=Standard 3=Sport 4=Ludicrous
+	AMS            []AmsSlot `json:"ams,omitempty"`             // nil when no AMS
+	ActiveExtruder  string  `json:"active_extruder,omitempty"`   // non-default active extruder for multi-toolhead printers
+	CoolingFanPct   int     `json:"cooling_fan_pct,omitempty"`   // 0-100, absent when not reported
+	FilamentUsedMM  float64 `json:"filament_used_mm,omitempty"`
+	TotalPrintHours float64 `json:"total_print_hours,omitempty"` // lifetime hours: from printer for Bambu/Klipper, Bridge-tracked otherwise
+	PrinterModel    string  `json:"printer_model,omitempty"`     // e.g. "X1 Carbon", "P1S", "Klipper"
 }
 
 type BambuReport struct {
@@ -67,9 +99,12 @@ type BambuPrint struct {
 		Node string `json:"node"`
 		Mode string `json:"mode"`
 	} `json:"lights_report"`
-	McRemainingTime int    `json:"mc_remaining_time"`
-	SpdLvl          int    `json:"spd_lvl"`
-	AmsStatus       int    `json:"ams_status"`
+	McRemainingTime    int     `json:"mc_remaining_time"`
+	SpdLvl             int     `json:"spd_lvl"`
+	AmsStatus          int     `json:"ams_status"`
+	CoolingFanSpeed    *flexInt `json:"cooling_fan_speed"`   // raw 0-15 value; nil when field absent (incremental update), 0 when fan is off
+	TotalRunTimeSec    int64   `json:"total_run_time"`       // lifetime seconds on the printer; only present in pushall responses
+	MachineType        string  `json:"machine_type"`         // model identifier, e.g. "X1C", "P1S"; only present in pushall responses
 	Ams             *struct {
 		AMS []struct {
 			Tray []struct {
@@ -104,10 +139,12 @@ func nextSequenceID() string {
 }
 
 type printSession struct {
-	StartTime  int64
-	FileName   string
-	NozzleTemp float64
-	BedTemp    float64
+	StartTime   int64
+	FileName    string
+	NozzleTemp  float64
+	BedTemp     float64
+	TempSamples []history.TempSample
+	lastSampleT int64 // unix time of last temp sample
 }
 
 var (
@@ -290,6 +327,30 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 		})
 		if err != nil {
 			return fmt.Errorf("failed to build print_speed payload: %w", err)
+		}
+		payload = string(b)
+
+	case "fan_speed":
+		pct := 0
+		if v, ok := args["pct"].(float64); ok {
+			pct = int(v)
+		}
+		if pct < 0 {
+			pct = 0
+		}
+		if pct > 100 {
+			pct = 100
+		}
+		s := pct * 255 / 100
+		b, err := json.Marshal(map[string]interface{}{
+			"print": map[string]interface{}{
+				"sequence_id": "0",
+				"command":     "gcode_line",
+				"param":       fmt.Sprintf("M106 P1 S%d", s),
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("failed to build fan_speed payload: %w", err)
 		}
 		payload = string(b)
 
@@ -537,6 +598,9 @@ func ConnectPrinter(p Printer) {
 
 	go func() {
 		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[%s] MQTT connection goroutine panic: %v", p.Name, r)
+			}
 			managedPrintersMu.Lock()
 			delete(managedPrinters, p.Name)
 			managedPrintersMu.Unlock()
@@ -647,6 +711,11 @@ func sendPushall(client mqtt.Client, printerName, requestTopic string) {
 
 func makeHandler(p Printer) mqtt.MessageHandler {
 	return func(_ mqtt.Client, msg mqtt.Message) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("[%s] MQTT message handler panic (message dropped): %v", p.Name, r)
+			}
+		}()
 		var report BambuReport
 		if err := json.Unmarshal(msg.Payload(), &report); err != nil {
 			log.Printf("[%s] MQTT parse error: %v | payload: %.120s", p.Name, err, msg.Payload())
@@ -736,53 +805,89 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 		// AMS: parse slot data; preserve previous when ams field is absent.
 		amsSlots := prev.AMS
 		if pr.Ams != nil {
-			amsSlots = nil
-			// tray_now is the globally loaded tray index ("0"-"3"), or "255"/"254" when none.
-			trayNow := -1
-			if n, err := strconv.Atoi(pr.Ams.TrayNow); err == nil && n < 254 {
-				trayNow = n
-			}
-			for amsIdx, unit := range pr.Ams.AMS {
-				for i, tray := range unit.Tray {
-					globalSlot := amsIdx*4 + i
-					color := tray.Color
-					if len(color) >= 6 {
-						color = color[:6] // strip alpha channel
+			if len(pr.Ams.AMS) > 0 {
+				// Full tray list present — rebuild slots from scratch.
+				amsSlots = nil
+				trayNow := -1
+				if n, err := strconv.Atoi(pr.Ams.TrayNow); err == nil && n < 254 {
+					trayNow = n
+				}
+				for amsIdx, unit := range pr.Ams.AMS {
+					for i, tray := range unit.Tray {
+						globalSlot := amsIdx*4 + i
+						color := tray.Color
+						if len(color) >= 6 {
+							color = color[:6] // strip alpha channel
+						}
+						amsSlots = append(amsSlots, AmsSlot{
+							Slot:     globalSlot,
+							Color:    color,
+							Material: tray.Material,
+							Active:   globalSlot == trayNow,
+						})
 					}
-					amsSlots = append(amsSlots, AmsSlot{
-						Slot:     globalSlot,
-						Color:    color,
-						Material: tray.Material,
-						Active:   globalSlot == trayNow,
-					})
+				}
+			} else if pr.Ams.TrayNow != "" {
+				// Incremental update — only tray_now changed (e.g. at print start).
+				// Update Active flags on the existing slot list rather than wiping it.
+				trayNow := -1
+				if n, err := strconv.Atoi(pr.Ams.TrayNow); err == nil && n < 254 {
+					trayNow = n
+				}
+				for i := range amsSlots {
+					amsSlots[i].Active = amsSlots[i].Slot == trayNow
 				}
 			}
 		}
 
-		t := TelemetryData{
-			Status:        status,
-			FileName:      fileName,
-			Progress:      progress,
-			Error:         pr.McPrintErrorCode,
-			NozzleTemp:    nozzleTemp,
-			NozzleTarget:  nozzleTarget,
-			BedTemp:       bedTemp,
-			BedTarget:     bedTarget,
-			LightOn:       lightOn,
-			TimeRemaining: timeRemaining,
-			SpeedLevel:    speedLevel,
-			AMS:           amsSlots,
+		// Cooling fan: raw 0-15 → 0-100%. Preserve previous when not reported (0).
+		coolingFanPct := prev.CoolingFanPct
+		if pr.CoolingFanSpeed != nil {
+			coolingFanPct = int(*pr.CoolingFanSpeed) * 100 / 15
 		}
 
-		// Track print sessions for history.
+		// Total lifetime print hours and model — only present in pushall responses;
+		// preserve previous values so incremental updates don't zero them out.
+		totalPrintHours := prev.TotalPrintHours
+		if pr.TotalRunTimeSec > 0 {
+			totalPrintHours = float64(pr.TotalRunTimeSec) / 3600
+		}
+		printerModel := prev.PrinterModel
+		if pr.MachineType != "" {
+			printerModel = mapMachineType(pr.MachineType)
+		}
+
+		t := TelemetryData{
+			Status:          status,
+			FileName:        fileName,
+			Progress:        progress,
+			Error:           pr.McPrintErrorCode,
+			NozzleTemp:      nozzleTemp,
+			NozzleTarget:    nozzleTarget,
+			BedTemp:         bedTemp,
+			BedTarget:       bedTarget,
+			LightOn:         lightOn,
+			TimeRemaining:   timeRemaining,
+			SpeedLevel:      speedLevel,
+			AMS:             amsSlots,
+			ActiveExtruder:  prev.ActiveExtruder,
+			CoolingFanPct:   coolingFanPct,
+			TotalPrintHours: totalPrintHours,
+			PrinterModel:    printerModel,
+		}
+
+		// Track print sessions for history (including periodic temp samples).
 		sessionMu.Lock()
 		sess := activeSessions[p.Name]
 		if prev.Status != "printing" && status == "printing" {
+			now := time.Now().Unix()
 			activeSessions[p.Name] = &printSession{
-				StartTime:  time.Now().Unix(),
-				FileName:   pr.SubTaskName,
-				NozzleTemp: pr.NozzleTemper,
-				BedTemp:    pr.BedTemper,
+				StartTime:   now,
+				FileName:    fileName, // use merged value; pr.SubTaskName may be absent in the state-change message
+				NozzleTemp:  nozzleTemp,
+				BedTemp:     bedTemp,
+				TempSamples: []history.TempSample{{T: 0, NozzleTemp: nozzleTemp, BedTemp: bedTemp}},
+				lastSampleT: now,
 			}
 			sessionMu.Unlock()
 		} else if prev.Status == "printing" && status != "printing" && sess != nil {
@@ -800,6 +905,7 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 				EndTime:     now,
 				Duration:    now - sess.StartTime,
 				Result:      result,
+				TempSamples: sess.TempSamples,
 			}
 			delete(activeSessions, p.Name)
 			sessionMu.Unlock()
@@ -809,6 +915,21 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 				}
 			}()
 		} else {
+			// Ongoing print — sample temps once per minute.
+			if status == "printing" && sess != nil {
+				if sess.FileName == "" && fileName != "" {
+					sess.FileName = fileName
+				}
+				now := time.Now().Unix()
+				if now-sess.lastSampleT >= 60 {
+					sess.TempSamples = append(sess.TempSamples, history.TempSample{
+						T:          now - sess.StartTime,
+						NozzleTemp: nozzleTemp,
+						BedTemp:    bedTemp,
+					})
+					sess.lastSampleT = now
+				}
+			}
 			sessionMu.Unlock()
 		}
 
@@ -839,6 +960,31 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 				log.Printf("[%s] webhook error: %v", p.Name, err)
 			}
 		}()
+	}
+}
+
+// mapMachineType converts BambuLab internal model codes to human-readable names.
+// If the value is already a recognisable string it is returned as-is.
+func mapMachineType(t string) string {
+	switch strings.ToUpper(strings.TrimSpace(t)) {
+	case "X1C", "C11":
+		return "X1 Carbon"
+	case "X1E", "C12":
+		return "X1E"
+	case "X1", "C10":
+		return "X1"
+	case "P1P", "N1":
+		return "P1P"
+	case "P1S", "N2S", "N2":
+		return "P1S"
+	case "A1", "N4":
+		return "A1"
+	case "A1M", "A1MINI", "N4M":
+		return "A1 Mini"
+	case "H2D":
+		return "H2D"
+	default:
+		return t // unknown code — pass through as-is
 	}
 }
 

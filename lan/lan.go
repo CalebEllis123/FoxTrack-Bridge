@@ -19,10 +19,12 @@ import (
 )
 
 type printSession struct {
-	StartTime  int64
-	FileName   string
-	NozzleTemp float64
-	BedTemp    float64
+	StartTime   int64
+	FileName    string
+	NozzleTemp  float64
+	BedTemp     float64
+	TempSamples []history.TempSample
+	lastSampleT int64
 }
 
 type Controller struct {
@@ -162,81 +164,123 @@ func (c *Controller) ProxyCamera(w http.ResponseWriter, _ *http.Request, name st
 }
 
 func (c *Controller) pollLoop(p configpkg.Printer, foxAPIKey string, stop <-chan struct{}) {
-	ticker := time.NewTicker(5 * time.Second)
-	defer ticker.Stop()
+	timer := time.NewTimer(0) // fire immediately on first iteration
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-stop:
 			return
-		default:
+		case <-timer.C:
 		}
 
-		t, relayPayload, err := fetchKlipperTelemetry(p)
-		if err != nil {
-			t = mqttpkg.TelemetryData{Status: "disconnected", Error: err.Error()}
-		}
-
-		t.PrinterID = p.Name
-		t.Timestamp = time.Now().Unix()
-
-		// Capture previous state before overwriting, then detect print transitions.
-		c.mu.Lock()
-		prev := c.states[p.Name]
-		prevStatus := ""
-		if prev != nil {
-			prevStatus = prev.Status
-		}
-		c.states[p.Name] = &t
-		c.mu.Unlock()
-
-		c.sessionMu.Lock()
-		sess := c.sessions[p.Name]
-		if prevStatus != "printing" && t.Status == "printing" {
-			c.sessions[p.Name] = &printSession{
-				StartTime:  time.Now().Unix(),
-				FileName:   t.FileName,
-				NozzleTemp: t.NozzleTemp,
-				BedTemp:    t.BedTemp,
-			}
-			c.sessionMu.Unlock()
-		} else if prevStatus == "printing" && t.Status != "printing" && sess != nil {
-			now := time.Now().Unix()
-			result := t.Status
-			if result != "finished" && result != "error" {
-				result = "cancelled"
-			}
-			rec := history.Record{
-				PrinterName: p.Name,
-				FileName:    sess.FileName,
-				NozzleTemp:  sess.NozzleTemp,
-				BedTemp:     sess.BedTemp,
-				StartTime:   sess.StartTime,
-				EndTime:     now,
-				Duration:    now - sess.StartTime,
-				Result:      result,
-			}
-			delete(c.sessions, p.Name)
-			c.sessionMu.Unlock()
-			go func() {
-				if err := history.Append(rec); err != nil {
-					log.Printf("[%s] history write error: %v", p.Name, err)
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[%s] poll panic: %v", p.Name, r)
+					timer.Reset(15 * time.Second)
 				}
 			}()
-		} else {
-			c.sessionMu.Unlock()
-		}
 
-		if foxAPIKey != "" && err == nil && shouldSendWebhook(prev, &t) {
-			if err := webhook.SendRelay(foxAPIKey, webhook.URL, p.Name, p.Name, relayPayload); err != nil {
-				log.Printf("[%s] webhook error: %v", p.Name, err)
+			t, relayPayload, err := fetchKlipperTelemetry(p)
+			if err != nil {
+				t = mqttpkg.TelemetryData{Status: "disconnected", Error: err.Error()}
 			}
-		}
+
+			t.PrinterID = p.Name
+			t.Timestamp = time.Now().Unix()
+
+			// Capture previous state before overwriting, then detect print transitions.
+			c.mu.Lock()
+			prev := c.states[p.Name]
+			prevStatus := ""
+			if prev != nil {
+				prevStatus = prev.Status
+			}
+			c.states[p.Name] = &t
+			c.mu.Unlock()
+
+			c.sessionMu.Lock()
+			sess := c.sessions[p.Name]
+			if prevStatus != "printing" && t.Status == "printing" {
+				now := time.Now().Unix()
+				c.sessions[p.Name] = &printSession{
+					StartTime:   now,
+					FileName:    t.FileName,
+					NozzleTemp:  t.NozzleTemp,
+					BedTemp:     t.BedTemp,
+					TempSamples: []history.TempSample{{T: 0, NozzleTemp: t.NozzleTemp, BedTemp: t.BedTemp}},
+					lastSampleT: now,
+				}
+				c.sessionMu.Unlock()
+			} else if prevStatus == "printing" && t.Status != "printing" && sess != nil {
+				now := time.Now().Unix()
+				result := t.Status
+				if result != "finished" && result != "error" {
+					result = "cancelled"
+				}
+				rec := history.Record{
+					PrinterName: p.Name,
+					FileName:    sess.FileName,
+					NozzleTemp:  sess.NozzleTemp,
+					BedTemp:     sess.BedTemp,
+					StartTime:   sess.StartTime,
+					EndTime:     now,
+					Duration:    now - sess.StartTime,
+					Result:      result,
+					TempSamples: sess.TempSamples,
+				}
+				delete(c.sessions, p.Name)
+				c.sessionMu.Unlock()
+				go func() {
+					if err := history.Append(rec); err != nil {
+						log.Printf("[%s] history write error: %v", p.Name, err)
+					}
+				}()
+			} else {
+				// Ongoing print — sample temps once per minute.
+				if t.Status == "printing" && sess != nil {
+					if sess.FileName == "" && t.FileName != "" {
+						sess.FileName = t.FileName
+					}
+					now := time.Now().Unix()
+					if now-sess.lastSampleT >= 60 {
+						sess.TempSamples = append(sess.TempSamples, history.TempSample{
+							T:          now - sess.StartTime,
+							NozzleTemp: t.NozzleTemp,
+							BedTemp:    t.BedTemp,
+						})
+						sess.lastSampleT = now
+					}
+				}
+				c.sessionMu.Unlock()
+			}
+
+			if foxAPIKey != "" && err == nil && shouldSendWebhook(prev, &t) {
+				if err := webhook.SendRelay(foxAPIKey, webhook.URL, p.Name, p.Name, relayPayload); err != nil {
+					log.Printf("[%s] webhook error: %v", p.Name, err)
+				}
+			}
+
+			// Adaptive poll interval: faster while printing, slower when idle/disconnected.
+			var interval time.Duration
+			switch t.Status {
+			case "printing":
+				interval = 2 * time.Second
+			case "paused":
+				interval = 5 * time.Second
+			case "disconnected":
+				interval = 15 * time.Second
+			default:
+				interval = 8 * time.Second
+			}
+			timer.Reset(interval)
+		}()
 
 		select {
 		case <-stop:
 			return
-		case <-ticker.C:
+		default:
 		}
 	}
 }
@@ -278,9 +322,40 @@ func sendJSONRequest(client *http.Client, method, u string, headers map[string]s
 	return out, nil
 }
 
+// klipperHours caches the Moonraker lifetime print hours per printer.
+// It is re-fetched at most once every 5 minutes to avoid per-poll overhead.
+var (
+	klipperHoursCache   = make(map[string]float64)
+	klipperHoursUpdated = make(map[string]time.Time)
+	klipperHoursMu      sync.Mutex
+)
+
+func klipperPrintHours(p configpkg.Printer) float64 {
+	klipperHoursMu.Lock()
+	if t, ok := klipperHoursUpdated[p.Name]; ok && time.Since(t) < 5*time.Minute {
+		h := klipperHoursCache[p.Name]
+		klipperHoursMu.Unlock()
+		return h
+	}
+	klipperHoursMu.Unlock()
+
+	client := &http.Client{Timeout: 3 * time.Second, Transport: insecureTransport()}
+	m, err := sendJSONRequest(client, "GET", moonrakerURL(p, "/server/history/summary"), moonrakerAuthHeaders(p), nil)
+	klipperHoursMu.Lock()
+	defer klipperHoursMu.Unlock()
+	klipperHoursUpdated[p.Name] = time.Now() // mark updated even on error to avoid retry every poll
+	if err == nil {
+		totals := nestedMap(m, "result", "job_totals")
+		if secs := floatAny(anyFromMap(totals, "total_print_time")); secs > 0 {
+			klipperHoursCache[p.Name] = secs / 3600
+		}
+	}
+	return klipperHoursCache[p.Name]
+}
+
 func fetchKlipperTelemetry(p configpkg.Printer) (mqttpkg.TelemetryData, webhook.RelayPayload, error) {
 	client := &http.Client{Timeout: 5 * time.Second, Transport: insecureTransport()}
-	u := moonrakerURL(p, "/printer/objects/query?print_stats&heater_bed&extruder&display_status&virtual_sdcard")
+	u := moonrakerURL(p, "/printer/objects/query?print_stats&heater_bed&extruder&extruder1&extruder2&extruder3&toolhead&fan&display_status&virtual_sdcard")
 	m, err := sendJSONRequest(client, "GET", u, moonrakerAuthHeaders(p), nil)
 	if err != nil {
 		return mqttpkg.TelemetryData{}, webhook.RelayPayload{}, err
@@ -288,10 +363,28 @@ func fetchKlipperTelemetry(p configpkg.Printer) (mqttpkg.TelemetryData, webhook.
 
 	status := nestedMap(m, "result", "status")
 	printStats := nestedMapAny(status, "print_stats")
-	extruder := nestedMapAny(status, "extruder")
 	bed := nestedMapAny(status, "heater_bed")
 	displayStatus := nestedMapAny(status, "display_status")
 	virtualSD := nestedMapAny(status, "virtual_sdcard")
+
+	// Determine active extruder. Klipper reports the current toolhead extruder name
+	// (e.g. "extruder", "extruder1", "extruder2") via the toolhead object.
+	toolhead := nestedMapAny(status, "toolhead")
+	activeExtruderName := stringAny(anyFromMap(toolhead, "extruder"))
+	if activeExtruderName == "" {
+		activeExtruderName = "extruder"
+	}
+	extruder := nestedMapAny(status, activeExtruderName)
+	if len(extruder) == 0 {
+		extruder = nestedMapAny(status, "extruder")
+		activeExtruderName = "extruder"
+	}
+
+	// Only expose active_extruder when it differs from the default single-extruder name.
+	activeExtruderField := ""
+	if activeExtruderName != "extruder" {
+		activeExtruderField = activeExtruderName
+	}
 
 	stateRaw := lowerString(stringAny(anyFromMap(printStats, "state")))
 	state := mapKlipperState(stateRaw)
@@ -317,6 +410,10 @@ func fetchKlipperTelemetry(p configpkg.Printer) (mqttpkg.TelemetryData, webhook.
 		}
 	}
 
+	fanSpeed := floatAny(anyFromMap(nestedMapAny(status, "fan"), "speed")) // 0.0-1.0
+	coolingFanPct := int(fanSpeed * 100)
+	filamentUsedMM := floatAny(anyFromMap(printStats, "filament_used"))
+
 	relay := webhook.RelayPayload{
 		Print: webhook.RelayPrint{
 			GcodeState:         mapMoonrakerRelayState(stateRaw),
@@ -326,18 +423,24 @@ func fetchKlipperTelemetry(p configpkg.Printer) (mqttpkg.TelemetryData, webhook.
 			NozzleTargetTemper: floatAny(anyFromMap(extruder, "target")),
 			BedTemper:          floatAny(anyFromMap(bed, "temperature")),
 			BedTargetTemper:    floatAny(anyFromMap(bed, "target")),
+			ActiveExtruder:     activeExtruderField,
 		},
 	}
 
 	return mqttpkg.TelemetryData{
-		Status:        state,
-		FileName:      fileName,
-		Progress:      progress,
-		NozzleTemp:    floatAny(anyFromMap(extruder, "temperature")),
-		NozzleTarget:  floatAny(anyFromMap(extruder, "target")),
-		BedTemp:       floatAny(anyFromMap(bed, "temperature")),
-		BedTarget:     floatAny(anyFromMap(bed, "target")),
-		TimeRemaining: remaining,
+		Status:          state,
+		FileName:        fileName,
+		Progress:        progress,
+		NozzleTemp:      floatAny(anyFromMap(extruder, "temperature")),
+		NozzleTarget:    floatAny(anyFromMap(extruder, "target")),
+		BedTemp:         floatAny(anyFromMap(bed, "temperature")),
+		BedTarget:       floatAny(anyFromMap(bed, "target")),
+		TimeRemaining:   remaining,
+		ActiveExtruder:  activeExtruderField,
+		CoolingFanPct:   coolingFanPct,
+		FilamentUsedMM:  filamentUsedMM,
+		TotalPrintHours: klipperPrintHours(p),
+		PrinterModel:    "Klipper",
 	}, relay, nil
 }
 
@@ -405,6 +508,22 @@ func (c *Controller) sendKlipperCommand(p configpkg.Printer, state *mqttpkg.Tele
 		}
 		startURL := moonrakerURL(p, "/printer/print/start?filename="+url.QueryEscape(filename))
 		_, err := sendJSONRequest(client, "POST", startURL, headers, nil)
+		return err
+	case "fan_speed":
+		pct := 0
+		if v, ok := args["pct"].(float64); ok {
+			pct = int(v)
+		}
+		if pct < 0 {
+			pct = 0
+		}
+		if pct > 100 {
+			pct = 100
+		}
+		s := pct * 255 / 100
+		script := fmt.Sprintf("M106 S%d", s)
+		gcodeURL := moonrakerURL(p, "/printer/gcode/script?script="+url.QueryEscape(script))
+		_, err := sendJSONRequest(client, "POST", gcodeURL, headers, nil)
 		return err
 	case "light", "toggle_light", "light_on", "light_off":
 		desiredOn := false

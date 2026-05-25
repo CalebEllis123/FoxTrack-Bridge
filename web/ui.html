@@ -269,27 +269,12 @@
                     </div>
                 </div>
             </div>
-            <div id="printersList" class="p-3 grid grid-cols-1 sm:grid-cols-2 gap-3"></div>
+            <div id="printersList" class="p-3 grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3"></div>
         </div>
     </div>
 
     <!-- View: History -->
     <div id="view-history" class="hidden px-5 pb-5">
-        <!-- History summary stats -->
-        <div id="historyStats" class="grid grid-cols-3 gap-3 mb-3 hidden">
-            <div class="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3">
-                <p class="text-[10px] text-zinc-400 font-medium uppercase tracking-wider">Total Prints</p>
-                <p id="hstatTotal" class="text-xl font-semibold leading-tight mt-0.5">0</p>
-            </div>
-            <div class="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3">
-                <p class="text-[10px] text-zinc-400 font-medium uppercase tracking-wider">Success Rate</p>
-                <p id="hstatRate" class="text-xl font-semibold leading-tight mt-0.5">—</p>
-            </div>
-            <div class="bg-zinc-900 border border-zinc-800 rounded-xl px-4 py-3">
-                <p class="text-[10px] text-zinc-400 font-medium uppercase tracking-wider">Total Hours</p>
-                <p id="hstatHours" class="text-xl font-semibold leading-tight mt-0.5">0h</p>
-            </div>
-        </div>
         <div class="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden">
             <div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
                 <h2 class="text-xs font-semibold text-zinc-300 uppercase tracking-wide">Print History</h2>
@@ -306,32 +291,47 @@
 
     <!-- View: Settings -->
     <div id="view-settings" class="hidden px-5 pt-5 pb-5">
-        <div class="max-w-lg space-y-3">
+        <div class="max-w-2xl space-y-3">
             <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
                 <div class="flex items-start justify-between mb-1">
-                    <h2 class="text-xs font-semibold text-zinc-300 uppercase tracking-wide">FoxTrack Connection</h2>
+                    <div>
+                        <h2 class="text-xs font-semibold text-zinc-300 uppercase tracking-wide">FoxTrack Sync <span class="normal-case text-zinc-500 font-normal">(optional)</span></h2>
+                    </div>
                     <a href="https://foxtrack.studio/settings" target="_blank" rel="noopener" class="text-[11px] text-zinc-400 hover:text-zinc-300 transition-colors flex items-center gap-1">
                         <i class="fas fa-arrow-up-right-from-square text-[9px]"></i> FoxTrack Settings
                     </a>
                 </div>
-                <p class="text-zinc-400 text-xs mb-4">Paste your API token from FoxTrack Settings &gt; Integrations &gt; 3D Printer.</p>
+                <p class="text-zinc-400 text-xs mb-4">Paste your API token from FoxTrack Settings &gt; Integrations &gt; 3D Printer to sync with the cloud. Leave blank to use the Bridge locally only.</p>
                 <label class="block text-zinc-400 text-xs font-medium mb-1.5 uppercase tracking-wide">API Key</label>
                 <div class="flex gap-2 items-center">
                     <input type="password" id="apiKey" autocomplete="off"
                         class="flex-1 bg-zinc-950 border border-zinc-800 text-zinc-100 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-white/20"
-                        placeholder="Paste API key">
+                        placeholder="Paste API key (optional)">
                     <button onclick="saveGlobalConfig()" class="btn-primary" style="padding:0.625rem 1rem;font-size:0.875rem">Save</button>
                 </div>
             </div>
-            <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h2 class="text-xs font-semibold text-zinc-300 uppercase tracking-wide">Advanced Mode</h2>
-                        <p class="text-zinc-400 text-xs mt-0.5">Shows the GCode console button on printer cards.</p>
+            <div class="grid grid-cols-2 gap-3">
+                <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="text-xs font-semibold text-zinc-300 uppercase tracking-wide">Advanced Mode</h2>
+                            <p class="text-zinc-400 text-xs mt-0.5">Shows the GCode console button on printer cards.</p>
+                        </div>
+                        <button id="advancedToggle" onclick="toggleAdvancedMode()" class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors bg-zinc-700 shrink-0 ml-3" role="switch" aria-checked="false">
+                            <span id="advancedThumb" class="inline-block h-3.5 w-3.5 transform rounded-full bg-zinc-400 transition-transform translate-x-0.5"></span>
+                        </button>
                     </div>
-                    <button id="advancedToggle" onclick="toggleAdvancedMode()" class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors bg-zinc-700" role="switch" aria-checked="false">
-                        <span id="advancedThumb" class="inline-block h-3.5 w-3.5 transform rounded-full bg-zinc-400 transition-transform translate-x-0.5"></span>
-                    </button>
+                </div>
+                <div class="bg-zinc-900 border border-zinc-800 rounded-xl p-5">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <h2 class="text-xs font-semibold text-zinc-300 uppercase tracking-wide">Auto-Update</h2>
+                            <p class="text-zinc-400 text-xs mt-0.5">Automatically download and restart when a new version is available.</p>
+                        </div>
+                        <button id="autoUpdateToggle" onclick="toggleAutoUpdate()" class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors bg-zinc-700 shrink-0 ml-3" role="switch" aria-checked="false">
+                            <span id="autoUpdateThumb" class="inline-block h-3.5 w-3.5 transform rounded-full bg-zinc-400 transition-transform translate-x-0.5"></span>
+                        </button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -344,7 +344,10 @@
         <span class="text-xs font-medium text-zinc-400 flex items-center gap-2">
             <i class="fas fa-terminal text-zinc-400"></i> Bridge Log
         </span>
-        <button onclick="toggleLogPanel()" class="btn-outline" style="padding:0.25rem 0.625rem;font-size:0.625rem">Close</button>
+        <div class="flex gap-1.5">
+            <button onclick="copyLogToClipboard()" class="btn-outline" style="padding:0.25rem 0.625rem;font-size:0.625rem"><i class="fas fa-copy mr-1"></i>Copy</button>
+            <button onclick="toggleLogPanel()" class="btn-outline" style="padding:0.25rem 0.625rem;font-size:0.625rem">Close</button>
+        </div>
     </div>
     <div id="logOutput" class="flex-1 overflow-y-auto p-3 font-mono text-[11px] leading-5 space-y-px"></div>
 </div>
@@ -359,7 +362,9 @@ let currentView = 'printers';
 let removeMode = false;
 let selectedForRemoval = new Set();
 let advancedMode = false;
+let autoUpdateEnabled = false;
 const pendingLightTarget = {}; // name -> expected light_on boolean; cleared when poll confirms state
+const pendingFanTarget = {}; // name -> expected cooling_fan_pct (0–100); cleared when poll confirms
 const cameraLoading = new Set(); // enc values whose camera stream is still loading
 
 const brands = {
@@ -491,6 +496,22 @@ function toggleAdvancedMode() {
     renderPrinters();
 }
 
+function applyAutoUpdateState(on) {
+    autoUpdateEnabled = on;
+    const toggle = document.getElementById('autoUpdateToggle');
+    const thumb = document.getElementById('autoUpdateThumb');
+    if (toggle) { toggle.setAttribute('aria-checked', on); toggle.className = toggle.className.replace(/bg-\S+/, on ? 'bg-white' : 'bg-zinc-700'); }
+    if (thumb) { thumb.className = thumb.className.replace(/translate-x-\S+/, on ? 'translate-x-5' : 'translate-x-0.5'); thumb.style.background = on ? '#09090b' : ''; }
+}
+
+async function toggleAutoUpdate() {
+    applyAutoUpdateState(!autoUpdateEnabled);
+    try {
+        const apiKey = document.getElementById('apiKey').value.trim();
+        await apiFetch('/api/config', { method:'POST', body:JSON.stringify({ api_key:apiKey, printers:configuredPrinters, auto_update:autoUpdateEnabled }) });
+    } catch (e) { toast('Failed to save: ' + e.message, 'error'); }
+}
+
 async function toggleLightEncoded(enc) {
     const name = decodePrinterName(enc);
     if (name in pendingLightTarget) return;
@@ -535,16 +556,15 @@ async function loadConfig() {
         const cfg = await apiFetch('/api/config');
         if (cfg && cfg.api_key) document.getElementById('apiKey').value = cfg.api_key;
         configuredPrinters = (cfg && cfg.printers) ? cfg.printers : [];
+        if (cfg && cfg.auto_update) applyAutoUpdateState(true);
         setBridgeStatus(true);
     } catch (_) { setBridgeStatus(false); }
 }
 
 async function saveGlobalConfig() {
     const apiKey = document.getElementById('apiKey').value.trim();
-    if (!apiKey) { toast('Please enter your API key', 'error'); return; }
     try {
-        const current = await apiFetch('/api/config').catch(() => ({}));
-        await apiFetch('/api/config', { method:'POST', body:JSON.stringify({ api_key:apiKey, printers:configuredPrinters }) });
+        await apiFetch('/api/config', { method:'POST', body:JSON.stringify({ api_key:apiKey, printers:configuredPrinters, auto_update:autoUpdateEnabled }) });
         toast('Settings saved');
     } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
@@ -766,13 +786,23 @@ function renderPrinters() {
         if (actual === pendingLightTarget[name]) delete pendingLightTarget[name];
     }
 
+    // Clear fan pending entries whose state has been confirmed by the latest poll
+    for (const name of Object.keys(pendingFanTarget)) {
+        const expected = pendingFanTarget[name];
+        const actual = liveStatus[name]?.cooling_fan_pct ?? 0;
+        const confirmed = expected === 0 ? actual === 0 : Math.abs(actual - expected) <= 12;
+        if (confirmed) delete pendingFanTarget[name];
+    }
+
     // Snapshot which panels are open before replacing innerHTML
     const openCams = new Set();
     const openGcode = new Set();
     const openSpeed = new Set();
+    const openFan = new Set();
     list.querySelectorAll('[id^="cam-"]').forEach(el => { if (!el.classList.contains('hidden')) openCams.add(el.id.slice(4)); });
     list.querySelectorAll('[id^="gcode-"]').forEach(el => { if (!el.classList.contains('hidden')) openGcode.add(el.id.slice(6)); });
     list.querySelectorAll('[id^="speed-"]').forEach(el => { if (!el.classList.contains('hidden')) openSpeed.add(el.id.slice(6)); });
+    list.querySelectorAll('[id^="fan-"]').forEach(el => { if (!el.classList.contains('hidden')) openFan.add(el.id.slice(4)); });
 
     if (configuredPrinters.length === 0) {
         list.innerHTML = '<div class="col-span-2 rounded-xl border border-zinc-800 bg-zinc-950 p-8 text-center">'
@@ -810,6 +840,11 @@ function renderPrinters() {
         const panel = document.getElementById('speed-' + enc);
         if (panel) panel.classList.remove('hidden');
     });
+    // Restore open fan panels
+    openFan.forEach(enc => {
+        const panel = document.getElementById('fan-' + enc);
+        if (panel) panel.classList.remove('hidden');
+    });
 }
 
 function printerCard(printer) {
@@ -825,6 +860,8 @@ function printerCard(printer) {
     const bedTgt = live && typeof live.bed_target === 'number' ? live.bed_target : null;
     const tr = live && typeof live.time_remaining === 'number' ? live.time_remaining : 0;
     const lightOn = !!(live && live.light_on);
+    const coolingFanPct = live && live.cooling_fan_pct > 0 ? live.cooling_fan_pct : null;
+    const filamentUsedMM = live && live.filament_used_mm > 0 ? live.filament_used_mm : null;
     const enc = encodeURIComponent(printer.name);
     const isBambu = !!(printer.serial && printer.lan_code && !printer.moonraker_url);
     const typeLabel = isBambu ? 'Bambu' : 'Klipper';
@@ -889,6 +926,28 @@ function printerCard(printer) {
         + '</div></div>'
         : '';
 
+    // Fan speed panel — collapsible, works for both Bambu and Klipper
+    const fanPending = printer.name in pendingFanTarget;
+    const fanTargetPct = pendingFanTarget[printer.name];
+    const fanPanel = !removeMode ?
+        '<div id="fan-' + enc + '" class="hidden border-t border-zinc-800 px-4 py-3">'
+        + '<div class="flex items-center gap-1.5">'
+        + '<span class="text-[10px] text-zinc-400 uppercase tracking-wide font-medium mr-0.5">Part Fan</span>'
+        + [0, 25, 50, 75, 100].map(pct => {
+            const label = pct === 0 ? 'Off' : pct + '%';
+            const isTarget = fanPending && fanTargetPct === pct;
+            const active = !fanPending && (pct === 0
+                ? coolingFanPct === null || coolingFanPct === 0
+                : coolingFanPct !== null && Math.abs(coolingFanPct - pct) <= 12);
+            const cls = (active || isTarget) ? 'btn-primary' : 'btn-outline';
+            const btnDis = (dis || (fanPending && !isTarget)) ? 'disabled ' : '';
+            const opacity = fanPending && !isTarget ? ' style="padding:0.2rem 0.5rem;font-size:0.65rem;opacity:0.4"' : ' style="padding:0.2rem 0.5rem;font-size:0.65rem"';
+            const icon = isTarget ? '<i class="fas fa-circle-notch fa-spin mr-1"></i>' : '';
+            return '<button ' + btnDis + 'onclick="setFanSpeedEncoded(\'' + enc + '\',' + pct + ')" class="' + cls + '"' + opacity + '>' + icon + label + '</button>';
+        }).join('')
+        + '</div></div>'
+        : '';
+
     const controls = removeMode ? '' :
         '<div class="flex items-end justify-between gap-3 mt-3">'
         + '<div class="flex flex-wrap gap-1.5">'
@@ -897,6 +956,7 @@ function printerCard(printer) {
         + '<button ' + dis + 'onclick="confirmStopEncoded(\'' + enc + '\')" class="btn-danger">Stop</button>'
         + '<button ' + (lightPending?'disabled ':'') + dis + 'onclick="toggleLightEncoded(\'' + enc + '\')" class="' + lightCls + '">' + lightHtml + '</button>'
         + '<button onclick="toggleCamera(\'' + enc + '\')" class="btn-outline cam-btn">' + (cameraLoading.has(enc) ? '<i class="fas fa-circle-notch fa-spin mr-1"></i>' : '<i class="fas fa-camera mr-1"></i>') + 'Camera</button>'
+        + '<button onclick="toggleFan(\'' + enc + '\')" class="btn-outline"><i class="fas fa-fan mr-1"></i>Fan</button>'
         + (isBambu
             ? '<button onclick="toggleSpeed(\'' + enc + '\')" class="btn-outline"><i class="fas fa-gauge-high mr-1"></i>Speed</button>'
               + (advancedMode ? '<button onclick="toggleGcode(\'' + enc + '\')" class="btn-outline"><i class="fas fa-terminal mr-1"></i>GCode</button>' : '')
@@ -924,7 +984,7 @@ function printerCard(printer) {
         + '<div class="flex items-start justify-between gap-2 mb-3">'
         + '<div class="min-w-0">'
         + '<p class="text-sm font-semibold leading-tight truncate">' + escHtml(printer.name) + '</p>'
-        + '<p class="text-[11px] text-zinc-400 mt-0.5">' + escHtml(isBambu ? (printer.ip||'') : (printer.moonraker_url||'')) + '</p>'
+        + (isBambu && live && live.printer_model ? '<p class="text-[11px] text-zinc-400 mt-0.5">' + escHtml(live.printer_model) + '</p>' : '')
         + '</div>'
         + '<div class="flex items-center gap-1.5 shrink-0">'
         + checkbox
@@ -935,7 +995,7 @@ function printerCard(printer) {
         + (file ? '<p class="text-[11px] text-zinc-400 truncate mb-1" title="' + escHtml(file) + '">' + escHtml(file) + '</p>' : '')
         + progressBar
         + '<div class="grid grid-cols-3 gap-2 mt-3">'
-        + tempCell('Nozzle', nozzle, nozzleTgt)
+        + tempCell(live && live.active_extruder ? 'Active Toolhead' : 'Nozzle', nozzle, nozzleTgt)
         + tempCell('Bed', bed, bedTgt)
         + '<div class="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2"><p class="text-[10px] text-zinc-400 font-medium uppercase tracking-wide">ETA</p>'
         + ((status==='printing'||status==='paused')
@@ -945,10 +1005,16 @@ function printerCard(printer) {
         + '</div>'
         + '</div>'
         + (error ? '<p class="mt-2 text-[11px] text-red-400">Error: ' + escHtml(error) + '</p>' : '')
+        + ((status==='printing' && filamentUsedMM !== null)
+            ? '<div class="flex items-center gap-3 mt-2">'
+              + '<span class="text-[11px] text-zinc-400"><i class="fas fa-ruler-horizontal mr-1"></i>' + (filamentUsedMM >= 1000 ? (filamentUsedMM/1000).toFixed(1)+'m' : Math.round(filamentUsedMM)+'mm') + '</span>'
+              + '</div>'
+            : '')
         + controls
         + '</div>'
         + camPanel
         + speedPanel
+        + fanPanel
         + gcodePanel
         + '</article>';
 }
@@ -978,10 +1044,16 @@ function toggleCamera(enc) {
         const btn = document.querySelector('#pcard-' + enc + ' .cam-btn');
         if (btn) btn.innerHTML = '<i class="fas fa-circle-notch fa-spin mr-1"></i>Camera';
         if (img) {
-            img.onload = img.onerror = () => {
+            img.onload = () => {
                 cameraLoading.delete(enc);
                 const b = document.querySelector('#pcard-' + enc + ' .cam-btn');
                 if (b) b.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
+            };
+            img.onerror = () => {
+                cameraLoading.delete(enc);
+                const b = document.querySelector('#pcard-' + enc + ' .cam-btn');
+                if (b) b.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
+                panel.innerHTML = '<div class="p-4 text-center text-xs text-zinc-400"><i class="fas fa-video-slash mr-1"></i>Camera unavailable — check webcam service or URL</div>';
             };
             img.src = '/api/camera/' + enc;
         }
@@ -998,6 +1070,36 @@ function toggleSpeed(enc) {
     const panel = document.getElementById('speed-' + enc);
     if (!panel) return;
     panel.classList.toggle('hidden');
+}
+
+function toggleFan(enc) {
+    const panel = document.getElementById('fan-' + enc);
+    if (!panel) return;
+    panel.classList.toggle('hidden');
+}
+
+async function setFanSpeedEncoded(enc, pct) {
+    const name = decodePrinterName(enc);
+    if (name in pendingFanTarget) return; // prevent double-tap while pending
+    pendingFanTarget[name] = pct;
+    renderPrinters();
+    // Safety: clear pending after 10s in case MQTT never confirms
+    const safetyTimer = setTimeout(() => {
+        if (pendingFanTarget[name] === pct) {
+            delete pendingFanTarget[name];
+            renderPrinters();
+        }
+    }, 10000);
+    try {
+        await apiFetch('/api/control/' + enc + '/fan_speed', { method: 'POST', body: JSON.stringify({ pct }) });
+        setTimeout(pollStatus, 1500);
+    } catch (e) {
+        clearTimeout(safetyTimer);
+        delete pendingFanTarget[name];
+        toast('Fan failed: ' + e.message, 'error');
+        renderPrinters();
+        pollStatus();
+    }
 }
 
 // ── Gcode console ─────────────────────────────────────────────────────────────
@@ -1028,6 +1130,68 @@ async function sendGcodeEncoded(enc) {
 
 let _historyRecords = [];
 
+function toggleTempChart(uid) {
+    const row = document.getElementById('hc-' + uid);
+    if (row) row.classList.toggle('hidden');
+}
+
+function toggleHistoryExpand(encName, btn) {
+    const dataRows = document.querySelectorAll('.hist-data-extra[data-extra-for="' + encName + '"]');
+    if (!dataRows.length) return;
+    const isHidden = dataRows[0].classList.contains('hidden');
+    dataRows.forEach(r => r.classList.toggle('hidden', !isHidden));
+    if (!isHidden) {
+        // Collapsing — also re-hide any open chart rows for the extra entries
+        document.querySelectorAll('.hist-chart-extra[data-extra-for="' + encName + '"]').forEach(r => r.classList.add('hidden'));
+    }
+    if (btn) {
+        const count = dataRows.length;
+        btn.innerHTML = isHidden
+            ? '<i class="fas fa-chevron-up mr-1 text-[10px]"></i>Show less'
+            : '<i class="fas fa-chevron-down mr-1 text-[10px]"></i>Show ' + count + ' more';
+    }
+}
+
+function buildTempChartSVG(samples, totalSec) {
+    const W = 420, H = 72, padL = 36, padR = 8, padT = 6, padB = 18;
+    const innerW = W - padL - padR, innerH = H - padT - padB;
+
+    const nozzleVals = samples.map(s => s.nozzle_temp);
+    const bedVals    = samples.map(s => s.bed_temp);
+    const allVals    = [...nozzleVals, ...bedVals].filter(v => v > 0);
+    if (!allVals.length) return '<p class="text-xs text-zinc-500">No data</p>';
+
+    const yMin = Math.floor(Math.min(...allVals) / 10) * 10;
+    const yMax = Math.ceil(Math.max(...allVals) / 10) * 10 + 5;
+    const xMax = totalSec > 0 ? totalSec : samples[samples.length - 1].t || 1;
+
+    const px = t  => padL + (t / xMax) * innerW;
+    const py = v  => padT + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
+
+    const toPoints = vals => samples
+        .map((s, i) => px(s.t).toFixed(1) + ',' + py(vals[i]).toFixed(1))
+        .join(' ');
+
+    // Axis labels
+    const yLabels = [yMin, Math.round((yMin + yMax) / 2), yMax].map(v =>
+        '<text x="' + (padL - 4) + '" y="' + py(v).toFixed(1) + '" text-anchor="end" dominant-baseline="middle" fill="#52525b" font-size="8">' + v + '</text>'
+    ).join('');
+
+    const durFmt = s => s >= 3600 ? Math.floor(s/3600)+'h'+Math.floor((s%3600)/60)+'m' : Math.floor(s/60)+'m';
+    const xLabels = '<text x="' + padL + '" y="' + (H - 4) + '" fill="#52525b" font-size="8">0</text>'
+        + '<text x="' + (padL + innerW) + '" y="' + (H - 4) + '" text-anchor="end" fill="#52525b" font-size="8">' + durFmt(xMax) + '</text>';
+
+    // Legend
+    const legend = '<text x="' + (padL + 4) + '" y="' + (padT + 9) + '" fill="#fb923c" font-size="8">Nozzle</text>'
+        + '<text x="' + (padL + 44) + '" y="' + (padT + 9) + '" fill="#60a5fa" font-size="8">Bed</text>';
+
+    return '<svg viewBox="0 0 ' + W + ' ' + H + '" style="width:100%;height:80px" xmlns="http://www.w3.org/2000/svg">'
+        + '<polyline points="' + toPoints(nozzleVals) + '" fill="none" stroke="#fb923c" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'
+        + '<polyline points="' + toPoints(bedVals) + '" fill="none" stroke="#60a5fa" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>'
+        + yLabels + xLabels + legend
+        + '</svg>';
+}
+
 function exportHistoryCsv() {
     if (!_historyRecords.length) return;
     const header = 'Printer,File,Result,Duration (s),Start,End\n';
@@ -1052,22 +1216,11 @@ async function refreshGlobalHistory() {
         const data = await apiFetch('/api/history');
         const records = (data && data.records) ? data.records : [];
         _historyRecords = records;
-        const statsDiv = document.getElementById('historyStats');
         const csvBtn = document.getElementById('exportCsvBtn');
         if (records.length === 0) {
-            if (statsDiv) statsDiv.classList.add('hidden');
             if (csvBtn) csvBtn.style.display = 'none';
             content.innerHTML = '<p class="text-zinc-400 text-xs py-8 text-center">No print history yet.</p>';
             return;
-        }
-        // Populate summary stats
-        const finished = records.filter(r => r.result === 'finished').length;
-        const totalSecs = records.reduce((s, r) => s + (r.duration || 0), 0);
-        if (statsDiv) {
-            document.getElementById('hstatTotal').textContent = records.length;
-            document.getElementById('hstatRate').textContent = Math.round(finished / records.length * 100) + '%';
-            document.getElementById('hstatHours').textContent = (totalSecs / 3600).toFixed(1) + 'h';
-            statsDiv.classList.remove('hidden');
         }
         if (csvBtn) csvBtn.style.display = '';
         const byPrinter = {};
@@ -1079,36 +1232,77 @@ async function refreshGlobalHistory() {
         Object.keys(byPrinter).forEach(n => byPrinter[n].sort((a,b) => (b.start_time||0)-(a.start_time||0)));
 
         const cards = Object.keys(byPrinter).map(name => {
+            const enc = encodeURIComponent(name);
             const recs = byPrinter[name];
-            const rows = recs.map(r => {
+            // Per-printer mini stats
+            const pFinished = recs.filter(r => r.result === 'finished').length;
+            const pSecs = recs.reduce((s, r) => s + (r.duration || 0), 0);
+            const pRate = recs.length ? Math.round(pFinished / recs.length * 100) + '%' : '—';
+            // Hours: use Moonraker's own lifetime total when available (Klipper), otherwise Bridge-tracked
+            const live = liveStatus[name];
+            const printerTotalHours = live && live.total_print_hours > 0 ? live.total_print_hours : null;
+            const pHours = printerTotalHours !== null
+                ? printerTotalHours.toFixed(1) + 'h'
+                : (pSecs / 3600).toFixed(1) + 'h';
+            const hoursTitle = printerTotalHours !== null ? 'Lifetime total from printer' : 'Tracked by Bridge';
+            const statsStrip = '<div class="grid grid-cols-3 gap-px bg-zinc-800 border-b border-zinc-800">'
+                + '<div class="bg-zinc-950 px-3 py-2 text-center"><p class="text-[9px] text-zinc-500 uppercase tracking-wide">Prints</p><p class="text-xs font-semibold mt-0.5">' + recs.length + '</p></div>'
+                + '<div class="bg-zinc-950 px-3 py-2 text-center"><p class="text-[9px] text-zinc-500 uppercase tracking-wide">Success</p><p class="text-xs font-semibold mt-0.5">' + pRate + '</p></div>'
+                + '<div class="bg-zinc-950 px-3 py-2 text-center"><p class="text-[9px] text-zinc-500 uppercase tracking-wide">Hours</p><p class="text-xs font-semibold mt-0.5" title="' + hoursTitle + '">' + pHours + (printerTotalHours !== null ? ' <span class="text-zinc-600 text-[8px]" title="' + hoursTitle + '">★</span>' : '') + '</p></div>'
+                + '</div>';
+
+            const rows = recs.map((r, i) => {
+                const uid = enc + '_' + i;
                 const date = new Date((r.start_time||0)*1000).toLocaleDateString();
                 const sec = r.duration||0;
                 const dur = sec>=3600 ? Math.floor(sec/3600)+'h '+Math.floor((sec%3600)/60)+'m' : Math.floor(sec/60)+'m';
                 const rc = r.result==='finished' ? 'text-emerald-400' : r.result==='error' ? 'text-red-400' : 'text-yellow-400';
-                return '<tr class="border-t border-zinc-800 hover:bg-zinc-900/40">'
+                const hasSamples = r.temp_samples && r.temp_samples.length > 1;
+                const isExtra = i >= 5;
+                const tempsBtn = hasSamples
+                    ? '<button onclick="toggleTempChart(\'' + uid + '\')" class="inline-flex items-center gap-1 border border-zinc-700 hover:border-zinc-500 text-zinc-400 hover:text-zinc-200 rounded-md px-1.5 py-0.5 transition-colors" style="font-size:0.65rem" title="Temperature chart"><i class="fas fa-chart-line"></i> Temps</button>'
+                    : '';
+                const dataRowClass = 'border-t border-zinc-800 hover:bg-zinc-900/40' + (isExtra ? ' hist-data-extra hidden' : '');
+                const chartRowClass = 'hidden border-t border-zinc-800 bg-zinc-900/30' + (isExtra ? ' hist-chart-extra' : '');
+                const extraAttr = isExtra ? ' data-extra-for="' + enc + '"' : '';
+                const dataRow = '<tr id="hr-' + uid + '" class="' + dataRowClass + '"' + extraAttr + '>'
                     + '<td class="py-2 pl-4 pr-3 text-zinc-300 max-w-[160px]"><span class="block truncate" title="' + escHtml(r.file_name) + '">' + escHtml(r.file_name||'—') + '</span></td>'
                     + '<td class="py-2 pr-3 ' + rc + '">' + escHtml(r.result) + '</td>'
                     + '<td class="py-2 pr-3 text-zinc-400">' + escHtml(dur) + '</td>'
-                    + '<td class="py-2 pr-4 text-zinc-400">' + escHtml(date) + '</td>'
+                    + '<td class="py-2 pr-3 text-zinc-400">' + escHtml(date) + '</td>'
+                    + '<td class="py-2 pr-4 text-right">' + tempsBtn + '</td>'
                     + '</tr>';
+                const chartRow = '<tr id="hc-' + uid + '" class="' + chartRowClass + '"' + extraAttr + '>'
+                    + '<td colspan="5" class="px-4 py-3">' + (hasSamples ? buildTempChartSVG(r.temp_samples, sec) : '') + '</td>'
+                    + '</tr>';
+                return dataRow + chartRow;
             }).join('');
+
+            const moreRow = recs.length > 5
+                ? '<tr><td colspan="5" class="px-4 py-2.5 border-t border-zinc-800 text-center">'
+                  + '<button onclick="toggleHistoryExpand(\'' + enc + '\', this)" class="text-[11px] text-zinc-400 hover:text-zinc-200 transition-colors py-0.5">'
+                  + '<i class="fas fa-chevron-down mr-1 text-[10px]"></i>Show ' + (recs.length - 5) + ' more'
+                  + '</button></td></tr>'
+                : '';
 
             return '<div class="bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden">'
                 + '<div class="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">'
                 + '<p class="text-sm font-semibold">' + escHtml(name) + '</p>'
                 + '<span class="text-[10px] text-zinc-400 border border-zinc-800 rounded-md px-1.5 py-0.5">' + recs.length + ' print' + (recs.length!==1?'s':'') + '</span>'
                 + '</div>'
-                + '<div class="max-h-72 overflow-y-auto"><table class="w-full text-xs">'
+                + statsStrip
+                + '<div class="max-h-96 overflow-y-auto"><table class="w-full text-xs">'
                 + '<thead><tr class="text-zinc-400 text-[10px] uppercase tracking-wide">'
                 + '<th class="pl-4 pr-3 py-2 font-medium text-left">File</th>'
                 + '<th class="pr-3 py-2 font-medium text-left">Result</th>'
                 + '<th class="pr-3 py-2 font-medium text-left">Duration</th>'
-                + '<th class="pr-4 py-2 font-medium text-left">Date</th>'
-                + '</tr></thead><tbody>' + rows + '</tbody></table></div>'
+                + '<th class="pr-3 py-2 font-medium text-left">Date</th>'
+                + '<th class="pr-4 py-2"></th>'
+                + '</tr></thead><tbody>' + rows + moreRow + '</tbody></table></div>'
                 + '</div>';
         }).join('');
 
-        content.innerHTML = '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">' + cards + '</div>';
+        content.innerHTML = '<div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">' + cards + '</div>';
     } catch (_) { content.innerHTML = '<p class="text-red-400 text-xs py-4 text-center">Failed to load history.</p>'; }
 }
 
@@ -1157,16 +1351,41 @@ async function installUpdate() {
 }
 
 async function restartForUpdate() {
-    const rb=document.getElementById('restartNowBtn'); if(rb) rb.disabled=true;
-    setUpdateProgress('Restarting...');
-    try { await apiFetch('/api/update/restart',{method:'POST'}); }
-    catch(e) { setUpdateProgress('Failed: '+e.message,true); if(rb) rb.disabled=false; }
+    const rb = document.getElementById('restartNowBtn');
+    if (rb) rb.disabled = true;
+    setUpdateProgress('Restarting…');
+    try {
+        await apiFetch('/api/update/restart', { method: 'POST' });
+    } catch(e) {
+        setUpdateProgress('Failed: ' + e.message, true);
+        if (rb) rb.disabled = false;
+        return;
+    }
+    setUpdateProgress('Restarting, please wait…');
+    // Give the old process time to exit, then poll until the new server is up
+    await new Promise(r => setTimeout(r, 2000));
+    const deadline = Date.now() + 25000;
+    while (Date.now() < deadline) {
+        try {
+            await fetch('/api/version');
+            location.reload();
+            return;
+        } catch (_) {}
+        await new Promise(r => setTimeout(r, 500));
+    }
+    setUpdateProgress('Taking longer than expected — please refresh manually.');
 }
 
 // ── Log panel ─────────────────────────────────────────────────────────────────
 
 (function initLogPanel() {
     let open = false, es = null;
+    window.copyLogToClipboard = function() {
+        const out = document.getElementById('logOutput');
+        if (!out) return;
+        const text = Array.from(out.children).map(el => el.textContent).join('\n');
+        navigator.clipboard.writeText(text).then(() => toast('Log copied')).catch(() => toast('Copy failed', 'error'));
+    };
     window.toggleLogPanel = function() {
         open = !open;
         const panel = document.getElementById('logPanel');

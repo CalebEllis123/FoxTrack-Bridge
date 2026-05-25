@@ -8,8 +8,9 @@ import (
 )
 
 type Config struct {
-	APIKey   string    `json:"api_key"`
-	Printers []Printer `json:"printers"`
+	APIKey     string    `json:"api_key"`
+	Printers   []Printer `json:"printers"`
+	AutoUpdate bool      `json:"auto_update,omitempty"`
 }
 
 type Printer struct {
