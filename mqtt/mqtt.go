@@ -12,6 +12,7 @@ import (
 
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 
+	"foxtrack-bridge/capture"
 	"foxtrack-bridge/history"
 	"foxtrack-bridge/webhook"
 )
@@ -44,19 +45,21 @@ func (f *flexInt) UnmarshalJSON(b []byte) error {
 }
 
 type Printer struct {
-	Name    string
-	IP      string
-	Serial  string
-	LANCode string
-	APIKey  string
+	Name            string
+	IP              string
+	Serial          string
+	LANCode         string
+	APIKey          string
+	FoxTrack2APIKey string
 }
 
 // AmsSlot holds the state of a single AMS filament tray.
 type AmsSlot struct {
-	Slot     int    `json:"slot"`      // 0-indexed tray position
-	Color    string `json:"color"`     // 6-char hex, e.g. "FF0000"
-	Material string `json:"material"`  // e.g. "PLA", "PETG"
-	Active   bool   `json:"active"`    // currently printing from this slot
+	Slot      int    `json:"slot"`               // 0-indexed tray position
+	Color     string `json:"color"`              // 6-char hex, e.g. "FF0000"
+	Material  string `json:"material"`           // e.g. "PLA", "PETG"
+	Active    bool   `json:"active"`             // currently printing from this slot
+	Remaining int    `json:"remaining,omitempty"` // 0-100% filament remaining; 0 means not reported or empty
 }
 
 type TelemetryData struct {
@@ -111,6 +114,7 @@ type BambuPrint struct {
 				ID       string `json:"id"`
 				Color    string `json:"tray_color"` // 8-char RRGGBBAA
 				Material string `json:"tray_type"`
+				Remain   int    `json:"remain"`     // 0-100%; "remain" is training-data knowledge of Bambu's field name, unverified this session
 			} `json:"tray"`
 		} `json:"ams"`
 		TrayNow string `json:"tray_now"` // currently loaded tray ("0"-"3"), "255" = none/external
@@ -129,6 +133,12 @@ var (
 	// Prevents duplicate goroutines when ConnectPrinter is called redundantly.
 	managedPrinters   = make(map[string]bool)
 	managedPrintersMu sync.Mutex
+
+	// snapshot throttle: last capture time and in-flight guard per printer.
+	snapLastT      = make(map[string]int64)
+	snapLastTMu    sync.Mutex
+	snapInFlight   = make(map[string]bool)
+	snapInFlightMu sync.Mutex
 )
 
 func nextSequenceID() string {
@@ -608,7 +618,7 @@ func ConnectPrinter(p Printer) {
 		for {
 			err := connectAndListen(p)
 			if err != nil {
-				log.Printf("[%s] disconnected: %v — retrying in 15s", p.Name, err)
+				log.Printf("[%s] disconnected: %v — retrying in 5s", p.Name, err)
 			}
 
 			// Remove client immediately so commands fail fast rather than
@@ -625,7 +635,7 @@ func ConnectPrinter(p Printer) {
 				Timestamp: time.Now().Unix(),
 			})
 
-			time.Sleep(15 * time.Second)
+			time.Sleep(5 * time.Second)
 		}
 	}()
 }
@@ -641,8 +651,8 @@ func connectAndListen(p Printer) error {
 	opts.SetClientID(fmt.Sprintf("foxtrack-%s-%d", p.Serial, time.Now().UnixNano()))
 	opts.SetTLSConfig(&tls.Config{InsecureSkipVerify: true})
 	opts.SetConnectTimeout(10 * time.Second)
-	opts.SetKeepAlive(30 * time.Second)
-	opts.SetPingTimeout(10 * time.Second)
+	opts.SetKeepAlive(20 * time.Second) // under typical 30s NAT TCP-idle timeout
+	opts.SetPingTimeout(5 * time.Second)
 	opts.SetAutoReconnect(false)
 	opts.SetCleanSession(true)
 
@@ -657,6 +667,7 @@ func connectAndListen(p Printer) error {
 		return token.Error()
 	}
 	if !client.IsConnected() {
+		client.Disconnect(0) // clean up any paho background goroutines
 		return fmt.Errorf("connect timed out")
 	}
 	log.Printf("[%s] MQTT connected", p.Name)
@@ -820,10 +831,11 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 							color = color[:6] // strip alpha channel
 						}
 						amsSlots = append(amsSlots, AmsSlot{
-							Slot:     globalSlot,
-							Color:    color,
-							Material: tray.Material,
-							Active:   globalSlot == trayNow,
+							Slot:      globalSlot,
+							Color:     color,
+							Material:  tray.Material,
+							Active:    globalSlot == trayNow,
+							Remaining: tray.Remain,
 						})
 					}
 				}
@@ -913,6 +925,21 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 				if err := history.Append(rec); err != nil {
 					log.Printf("[%s] history write error: %v", p.Name, err)
 				}
+				if p.FoxTrack2APIKey != "" {
+					webhook.SendHistory(p.FoxTrack2APIKey, webhook.HistoryURLV2, webhook.HistoryPayload{
+						Type:        "print_complete",
+						PrinterName: p.Name,
+						Serial:      p.Serial,
+						FileName:    rec.FileName,
+						NozzleTemp:  rec.NozzleTemp,
+						BedTemp:     rec.BedTemp,
+						StartTime:   time.Unix(rec.StartTime, 0).UTC().Format(time.RFC3339),
+						EndTime:     time.Unix(rec.EndTime, 0).UTC().Format(time.RFC3339),
+						Duration:    rec.Duration,
+						Result:      rec.Result,
+						Timestamp:   time.Now().UTC().Format(time.RFC3339),
+					})
+				}
 			}()
 		} else {
 			// Ongoing print — sample temps once per minute.
@@ -939,12 +966,18 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 			p.Name, status, fileName, progress,
 			nozzleTemp, bedTemp)
 
-		if p.APIKey == "" {
-			log.Printf("[%s] skipping webhook — API key not configured", p.Name)
-			return
-		}
-
 		go func() {
+			b := lightOn
+			var relayAms []webhook.RelayAmsSlot
+			for _, s := range amsSlots {
+				relayAms = append(relayAms, webhook.RelayAmsSlot{
+					Slot:      s.Slot,
+					Color:     s.Color,
+					Material:  s.Material,
+					Remaining: s.Remaining,
+					Active:    s.Active,
+				})
+			}
 			relayPayload := webhook.RelayPayload{
 				Print: webhook.RelayPrint{
 					GcodeState:         pr.GcodeState,
@@ -954,12 +987,63 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 					NozzleTargetTemper: nozzleTarget,
 					BedTemper:          bedTemp,
 					BedTargetTemper:    bedTarget,
+					LightOn:            &b,
+					Ams:                relayAms,
 				},
 			}
-			if err := webhook.SendRelay(p.APIKey, webhook.URL, p.Serial, p.Name, relayPayload); err != nil {
-				log.Printf("[%s] webhook error: %v", p.Name, err)
+			if p.APIKey != "" {
+				if err := webhook.SendRelay(p.APIKey, webhook.URL, p.Serial, p.Name, relayPayload); err != nil {
+					log.Printf("[%s] webhook error (legacy): %v", p.Name, err)
+				}
+			} else {
+				log.Printf("[%s] skipping webhook — API key not configured", p.Name)
+			}
+			if p.FoxTrack2APIKey != "" {
+				log.Printf("[%s] [debug] v2 auth token length: %d chars", p.Name, len(p.FoxTrack2APIKey))
+				if err := webhook.SendRelay(p.FoxTrack2APIKey, webhook.RelayURLV2, p.Serial, p.Name, relayPayload); err != nil {
+					log.Printf("[%s] webhook error (v2): %v", p.Name, err)
+				}
 			}
 		}()
+
+		if (t.Status == "printing" || t.Status == "paused") && p.FoxTrack2APIKey != "" {
+			now := time.Now().Unix()
+			snapLastTMu.Lock()
+			eligible := now-snapLastT[p.Name] >= 25
+			if eligible {
+				snapLastT[p.Name] = now
+			}
+			snapLastTMu.Unlock()
+
+			if eligible {
+				snapInFlightMu.Lock()
+				busy := snapInFlight[p.Name]
+				if !busy {
+					snapInFlight[p.Name] = true
+				}
+				snapInFlightMu.Unlock()
+
+				if !busy {
+					ip, lanCode, serial := p.IP, p.LANCode, p.Serial
+					name, apiKey := p.Name, p.FoxTrack2APIKey
+					go func() {
+						defer func() {
+							snapInFlightMu.Lock()
+							delete(snapInFlight, name)
+							snapInFlightMu.Unlock()
+						}()
+						frame, err := capture.BambuFrame(ip, lanCode, name)
+						if err != nil {
+							log.Printf("[%s] snapshot capture: %v", name, err)
+							return
+						}
+						if err := webhook.SendSnapshot(apiKey, webhook.SnapshotURLV2, serial, name, frame); err != nil {
+							log.Printf("[%s] snapshot send: %v", name, err)
+						}
+					}()
+				}
+			}
+		}
 	}
 }
 

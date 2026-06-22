@@ -302,12 +302,19 @@
                     </a>
                 </div>
                 <p class="text-zinc-400 text-xs mb-4">Paste your API token from FoxTrack Settings &gt; Integrations &gt; 3D Printer to sync with the cloud. Leave blank to use the Bridge locally only.</p>
-                <label class="block text-zinc-400 text-xs font-medium mb-1.5 uppercase tracking-wide">API Key</label>
+                <label class="block text-zinc-400 text-xs font-medium mb-1.5 uppercase tracking-wide">FoxTrack Sync</label>
+                <div class="flex gap-2 items-center mb-4">
+                    <input type="password" id="foxtrack2ApiKey" autocomplete="off"
+                        class="flex-1 bg-zinc-950 border border-zinc-800 text-zinc-100 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-white/20"
+                        placeholder="Paste API key (optional)">
+                    <button onclick="saveFoxtrack2ApiKey()" class="btn-primary" style="padding:0.625rem 1rem;font-size:0.875rem">Save</button>
+                </div>
+                <label class="block text-zinc-400 text-xs font-medium mb-1.5 uppercase tracking-wide">FoxTrack (Legacy)</label>
                 <div class="flex gap-2 items-center">
                     <input type="password" id="apiKey" autocomplete="off"
                         class="flex-1 bg-zinc-950 border border-zinc-800 text-zinc-100 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-1 focus:ring-white/20"
                         placeholder="Paste API key (optional)">
-                    <button onclick="saveGlobalConfig()" class="btn-primary" style="padding:0.625rem 1rem;font-size:0.875rem">Save</button>
+                    <button onclick="saveLegacyApiKey()" class="btn-primary" style="padding:0.625rem 1rem;font-size:0.875rem">Save</button>
                 </div>
             </div>
             <div class="grid grid-cols-2 gap-3">
@@ -507,8 +514,7 @@ function applyAutoUpdateState(on) {
 async function toggleAutoUpdate() {
     applyAutoUpdateState(!autoUpdateEnabled);
     try {
-        const apiKey = document.getElementById('apiKey').value.trim();
-        await apiFetch('/api/config', { method:'POST', body:JSON.stringify({ api_key:apiKey, printers:configuredPrinters, auto_update:autoUpdateEnabled }) });
+        await apiFetch('/api/config', { method:'POST', body:JSON.stringify(buildConfigPayload()) });
     } catch (e) { toast('Failed to save: ' + e.message, 'error'); }
 }
 
@@ -555,16 +561,32 @@ async function loadConfig() {
     try {
         const cfg = await apiFetch('/api/config');
         if (cfg && cfg.api_key) document.getElementById('apiKey').value = cfg.api_key;
+        if (cfg && cfg.foxtrack2_api_key) document.getElementById('foxtrack2ApiKey').value = cfg.foxtrack2_api_key;
         configuredPrinters = (cfg && cfg.printers) ? cfg.printers : [];
         if (cfg && cfg.auto_update) applyAutoUpdateState(true);
         setBridgeStatus(true);
     } catch (_) { setBridgeStatus(false); }
 }
 
-async function saveGlobalConfig() {
-    const apiKey = document.getElementById('apiKey').value.trim();
+function buildConfigPayload() {
+    return {
+        api_key: document.getElementById('apiKey').value.trim(),
+        foxtrack2_api_key: document.getElementById('foxtrack2ApiKey').value.trim(),
+        printers: configuredPrinters,
+        auto_update: autoUpdateEnabled,
+    };
+}
+
+async function saveLegacyApiKey() {
     try {
-        await apiFetch('/api/config', { method:'POST', body:JSON.stringify({ api_key:apiKey, printers:configuredPrinters, auto_update:autoUpdateEnabled }) });
+        await apiFetch('/api/config', { method:'POST', body:JSON.stringify(buildConfigPayload()) });
+        toast('Settings saved');
+    } catch (e) { toast('Failed: ' + e.message, 'error'); }
+}
+
+async function saveFoxtrack2ApiKey() {
+    try {
+        await apiFetch('/api/config', { method:'POST', body:JSON.stringify(buildConfigPayload()) });
         toast('Settings saved');
     } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }

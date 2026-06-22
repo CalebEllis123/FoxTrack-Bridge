@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"foxtrack-bridge/capture"
 	configpkg "foxtrack-bridge/config"
 	"foxtrack-bridge/history"
 	mqttpkg "foxtrack-bridge/mqtt"
@@ -28,31 +29,37 @@ type printSession struct {
 }
 
 type Controller struct {
-	mu        sync.RWMutex
-	states    map[string]*mqttpkg.TelemetryData
-	printers  map[string]configpkg.Printer
-	cancelers map[string]chan struct{}
-	sessionMu sync.Mutex
-	sessions  map[string]*printSession
+	mu             sync.RWMutex
+	states         map[string]*mqttpkg.TelemetryData
+	printers       map[string]configpkg.Printer
+	cancelers      map[string]chan struct{}
+	sessionMu      sync.Mutex
+	sessions       map[string]*printSession
+	snapLastT      map[string]int64
+	snapLastTMu    sync.Mutex
+	snapInFlight   map[string]bool
+	snapInFlightMu sync.Mutex
 }
 
 func NewController() *Controller {
 	return &Controller{
-		states:    map[string]*mqttpkg.TelemetryData{},
-		printers:  map[string]configpkg.Printer{},
-		cancelers: map[string]chan struct{}{},
-		sessions:  map[string]*printSession{},
+		states:       map[string]*mqttpkg.TelemetryData{},
+		printers:     map[string]configpkg.Printer{},
+		cancelers:    map[string]chan struct{}{},
+		sessions:     map[string]*printSession{},
+		snapLastT:    map[string]int64{},
+		snapInFlight: map[string]bool{},
 	}
 }
 
-func (c *Controller) SyncPrinters(printers []configpkg.Printer, foxAPIKey string) {
+func (c *Controller) SyncPrinters(printers []configpkg.Printer, foxAPIKey, fox2APIKey string) {
 	keep := make(map[string]bool)
 	for _, p := range printers {
 		if isBambuPrinter(p) || strings.TrimSpace(p.MoonrakerURL) == "" {
 			continue
 		}
 		keep[p.Name] = true
-		c.AddOrUpdatePrinter(p, foxAPIKey)
+		c.AddOrUpdatePrinter(p, foxAPIKey, fox2APIKey)
 	}
 
 	c.mu.Lock()
@@ -67,7 +74,7 @@ func (c *Controller) SyncPrinters(printers []configpkg.Printer, foxAPIKey string
 	c.mu.Unlock()
 }
 
-func (c *Controller) AddOrUpdatePrinter(p configpkg.Printer, foxAPIKey string) {
+func (c *Controller) AddOrUpdatePrinter(p configpkg.Printer, foxAPIKey, fox2APIKey string) {
 	if p.Name == "" {
 		return
 	}
@@ -85,7 +92,7 @@ func (c *Controller) AddOrUpdatePrinter(p configpkg.Printer, foxAPIKey string) {
 	c.printers[p.Name] = p
 	c.mu.Unlock()
 
-	go c.pollLoop(p, foxAPIKey, stop)
+	go c.pollLoop(p, foxAPIKey, fox2APIKey, stop)
 }
 
 func (c *Controller) RemovePrinter(name string) {
@@ -163,7 +170,7 @@ func (c *Controller) ProxyCamera(w http.ResponseWriter, _ *http.Request, name st
 	return fmt.Errorf("camera unavailable")
 }
 
-func (c *Controller) pollLoop(p configpkg.Printer, foxAPIKey string, stop <-chan struct{}) {
+func (c *Controller) pollLoop(p configpkg.Printer, foxAPIKey, fox2APIKey string, stop <-chan struct{}) {
 	timer := time.NewTimer(0) // fire immediately on first iteration
 	defer timer.Stop()
 
@@ -236,6 +243,21 @@ func (c *Controller) pollLoop(p configpkg.Printer, foxAPIKey string, stop <-chan
 					if err := history.Append(rec); err != nil {
 						log.Printf("[%s] history write error: %v", p.Name, err)
 					}
+					if fox2APIKey != "" {
+						webhook.SendHistory(fox2APIKey, webhook.HistoryURLV2, webhook.HistoryPayload{
+							Type:        "print_complete",
+							PrinterName: p.Name,
+							Serial:      p.Name,
+							FileName:    rec.FileName,
+							NozzleTemp:  rec.NozzleTemp,
+							BedTemp:     rec.BedTemp,
+							StartTime:   time.Unix(rec.StartTime, 0).UTC().Format(time.RFC3339),
+							EndTime:     time.Unix(rec.EndTime, 0).UTC().Format(time.RFC3339),
+							Duration:    rec.Duration,
+							Result:      rec.Result,
+							Timestamp:   time.Now().UTC().Format(time.RFC3339),
+						})
+					}
 				}()
 			} else {
 				// Ongoing print — sample temps once per minute.
@@ -256,9 +278,56 @@ func (c *Controller) pollLoop(p configpkg.Printer, foxAPIKey string, stop <-chan
 				c.sessionMu.Unlock()
 			}
 
-			if foxAPIKey != "" && err == nil && shouldSendWebhook(prev, &t) {
-				if err := webhook.SendRelay(foxAPIKey, webhook.URL, p.Name, p.Name, relayPayload); err != nil {
-					log.Printf("[%s] webhook error: %v", p.Name, err)
+			if err == nil && shouldSendWebhook(prev, &t) {
+				if foxAPIKey != "" {
+					if err := webhook.SendRelay(foxAPIKey, webhook.URL, p.Name, p.Name, relayPayload); err != nil {
+						log.Printf("[%s] webhook error: %v", p.Name, err)
+					}
+				}
+				if fox2APIKey != "" {
+					if err := webhook.SendRelay(fox2APIKey, webhook.RelayURLV2, p.Name, p.Name, relayPayload); err != nil {
+						log.Printf("[%s] webhook error (v2): %v", p.Name, err)
+					}
+				}
+			}
+
+			if fox2APIKey != "" && (t.Status == "printing" || t.Status == "paused") && strings.TrimSpace(p.WebcamURL) != "" {
+				now := time.Now().Unix()
+				c.snapLastTMu.Lock()
+				eligible := now-c.snapLastT[p.Name] >= 25
+				if eligible {
+					c.snapLastT[p.Name] = now
+				}
+				c.snapLastTMu.Unlock()
+
+				if eligible {
+					c.snapInFlightMu.Lock()
+					busy := c.snapInFlight[p.Name]
+					if !busy {
+						c.snapInFlight[p.Name] = true
+					}
+					c.snapInFlightMu.Unlock()
+
+					if !busy {
+						webcamURL := strings.TrimSpace(p.WebcamURL)
+						name := p.Name
+						apiKey := fox2APIKey
+						go func() {
+							defer func() {
+								c.snapInFlightMu.Lock()
+								delete(c.snapInFlight, name)
+								c.snapInFlightMu.Unlock()
+							}()
+							frame, err := capture.KlipperFrame(webcamURL)
+							if err != nil {
+								log.Printf("[%s] snapshot capture: %v", name, err)
+								return
+							}
+							if err := webhook.SendSnapshot(apiKey, webhook.SnapshotURLV2, name, name, frame); err != nil {
+								log.Printf("[%s] snapshot send: %v", name, err)
+							}
+						}()
+					}
 				}
 			}
 
@@ -270,7 +339,7 @@ func (c *Controller) pollLoop(p configpkg.Printer, foxAPIKey string, stop <-chan
 			case "paused":
 				interval = 5 * time.Second
 			case "disconnected":
-				interval = 15 * time.Second
+				interval = 5 * time.Second
 			default:
 				interval = 8 * time.Second
 			}

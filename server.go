@@ -86,6 +86,7 @@ func StartServer() {
 
 	syncPrinterConnections(cfg)
 	go autoUpdateLoop()
+	go pollBridgeCommands()
 
 	http.HandleFunc("/", handleRoot)
 	http.HandleFunc("/logo.png", handleLogo)
@@ -207,11 +208,12 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 
 func mqttPrinter(p config.Printer, cfg *config.Config) mqttpkg.Printer {
 	return mqttpkg.Printer{
-		Name:       p.Name,
-		IP:         p.IP,
-		Serial:     p.Serial,
-		LANCode:    p.LANCode,
-		APIKey: cfg.APIKey,
+		Name:            p.Name,
+		IP:              p.IP,
+		Serial:          p.Serial,
+		LANCode:         p.LANCode,
+		APIKey:          cfg.APIKey,
+		FoxTrack2APIKey: cfg.FoxTrack2APIKey,
 	}
 }
 
@@ -606,7 +608,7 @@ func handlePrinters(w http.ResponseWriter, r *http.Request) {
 		if isBambuPrinterConfig(p) {
 			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
 		} else {
-			lanCtrl.AddOrUpdatePrinter(p, cfg.APIKey)
+			lanCtrl.AddOrUpdatePrinter(p, cfg.APIKey, cfg.FoxTrack2APIKey)
 			log.Printf("[%s] connected via Moonraker", p.Name)
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
@@ -651,7 +653,7 @@ func syncPrinterConnections(cfg *config.Config) {
 			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
 		}
 	}
-	lanCtrl.SyncPrinters(cfg.Printers, cfg.APIKey)
+	lanCtrl.SyncPrinters(cfg.Printers, cfg.APIKey, cfg.FoxTrack2APIKey)
 }
 
 func printerIsBambu(name string) bool {
