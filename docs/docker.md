@@ -48,6 +48,35 @@ docker build \
 
 Replace the repository, branch, and `APP_VERSION` value for your own fork or release.
 
+## Published images
+
+The Docker workflow builds images for pull requests and publishes multi-platform `linux/amd64` and `linux/arm64` images to GitHub Container Registry on pushes to `main`, on `v*` tags, and on manual workflow runs.
+
+For this repository, images are published as:
+
+```text
+ghcr.io/<owner>/foxtrack-bridge
+```
+
+For example, a fork owned by `jonathanq` publishes:
+
+```bash
+docker pull ghcr.io/jonathanq/foxtrack-bridge:latest
+```
+
+Run a published image with:
+
+```bash
+docker run -d \
+  --name foxtrack-bridge \
+  -p 8080:8080 \
+  -v foxtrack-bridge-data:/data \
+  --restart unless-stopped \
+  ghcr.io/jonathanq/foxtrack-bridge:latest
+```
+
+The first package published from a fork may be private by default. If you want a server to pull it without authenticating, make the package public in the repository package settings. Otherwise, run `docker login ghcr.io` on the server before pulling.
+
 ## Notes
 
 - The image runs as a non-root `foxtrack` user.
