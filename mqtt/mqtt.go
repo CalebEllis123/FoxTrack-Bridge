@@ -139,6 +139,11 @@ var (
 	snapLastTMu    sync.Mutex
 	snapInFlight   = make(map[string]bool)
 	snapInFlightMu sync.Mutex
+
+	// relay webhook dedup: unix time of the last relay send per printer,
+	// used for the 60s heartbeat when telemetry is otherwise unchanged.
+	webhookLastSent   = make(map[string]int64)
+	webhookLastSentMu sync.Mutex
 )
 
 func nextSequenceID() string {
@@ -718,6 +723,23 @@ func sendPushall(client mqtt.Client, printerName, requestTopic string) {
 	log.Printf("[%s] sent pushall", printerName)
 }
 
+// ShouldSendWebhook reports whether curr differs from prev in any field the
+// cloud relay cares about. Shared by the Bambu MQTT path and the Klipper LAN
+// path (lan.Controller) so both printer types deduplicate webhooks the same way.
+func ShouldSendWebhook(prev, curr *TelemetryData) bool {
+	if prev == nil {
+		return true
+	}
+	return prev.Status != curr.Status ||
+		prev.FileName != curr.FileName ||
+		prev.Progress != curr.Progress ||
+		prev.Error != curr.Error ||
+		int(prev.NozzleTemp) != int(curr.NozzleTemp) ||
+		int(prev.BedTemp) != int(curr.BedTemp) ||
+		prev.LightOn != curr.LightOn ||
+		prev.TimeRemaining != curr.TimeRemaining
+}
+
 func makeHandler(p Printer) mqtt.MessageHandler {
 	return func(_ mqtt.Client, msg mqtt.Message) {
 		defer func() {
@@ -966,45 +988,62 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 			p.Name, status, fileName, progress,
 			nozzleTemp, bedTemp)
 
-		go func() {
-			b := lightOn
-			var relayAms []webhook.RelayAmsSlot
-			for _, s := range amsSlots {
-				relayAms = append(relayAms, webhook.RelayAmsSlot{
-					Slot:      s.Slot,
-					Color:     s.Color,
-					Material:  s.Material,
-					Remaining: s.Remaining,
-					Active:    s.Active,
-				})
-			}
-			relayPayload := webhook.RelayPayload{
-				Print: webhook.RelayPrint{
-					GcodeState:         pr.GcodeState,
-					SubTaskName:        fileName,
-					McPercent:          progress,
-					NozzleTemper:       nozzleTemp,
-					NozzleTargetTemper: nozzleTarget,
-					BedTemper:          bedTemp,
-					BedTargetTemper:    bedTarget,
-					LightOn:            &b,
-					Ams:                relayAms,
-				},
-			}
-			if p.APIKey != "" {
-				if err := webhook.SendRelay(p.APIKey, webhook.URL, p.Serial, p.Name, relayPayload); err != nil {
-					log.Printf("[%s] webhook error (legacy): %v", p.Name, err)
+		// Deduplicate relay webhooks — Bambu pushes ~1 message/second while
+		// printing. Terminal transitions (print complete/failed) always send
+		// immediately; otherwise send on meaningful change, with a 60s
+		// heartbeat so the cloud still sees the printer as alive.
+		terminal := status != prev.Status && (status == "finished" || status == "error")
+		sendWebhook := terminal || ShouldSendWebhook(prev, &t)
+		if !sendWebhook {
+			webhookLastSentMu.Lock()
+			sendWebhook = time.Now().Unix()-webhookLastSent[p.Name] >= 60
+			webhookLastSentMu.Unlock()
+		}
+
+		if sendWebhook {
+			webhookLastSentMu.Lock()
+			webhookLastSent[p.Name] = time.Now().Unix()
+			webhookLastSentMu.Unlock()
+
+			go func() {
+				b := lightOn
+				var relayAms []webhook.RelayAmsSlot
+				for _, s := range amsSlots {
+					relayAms = append(relayAms, webhook.RelayAmsSlot{
+						Slot:      s.Slot,
+						Color:     s.Color,
+						Material:  s.Material,
+						Remaining: s.Remaining,
+						Active:    s.Active,
+					})
 				}
-			} else {
-				log.Printf("[%s] skipping webhook — API key not configured", p.Name)
-			}
-			if p.FoxTrack2APIKey != "" {
-				log.Printf("[%s] [debug] v2 auth token length: %d chars", p.Name, len(p.FoxTrack2APIKey))
-				if err := webhook.SendRelay(p.FoxTrack2APIKey, webhook.RelayURLV2, p.Serial, p.Name, relayPayload); err != nil {
-					log.Printf("[%s] webhook error (v2): %v", p.Name, err)
+				relayPayload := webhook.RelayPayload{
+					Print: webhook.RelayPrint{
+						GcodeState:         pr.GcodeState,
+						SubTaskName:        fileName,
+						McPercent:          progress,
+						NozzleTemper:       nozzleTemp,
+						NozzleTargetTemper: nozzleTarget,
+						BedTemper:          bedTemp,
+						BedTargetTemper:    bedTarget,
+						LightOn:            &b,
+						Ams:                relayAms,
+					},
 				}
-			}
-		}()
+				if p.APIKey != "" {
+					if err := webhook.SendRelay(p.APIKey, webhook.URL, p.Serial, p.Name, relayPayload); err != nil {
+						log.Printf("[%s] webhook error (legacy): %v", p.Name, err)
+					}
+				} else {
+					log.Printf("[%s] skipping webhook — API key not configured", p.Name)
+				}
+				if p.FoxTrack2APIKey != "" {
+					if err := webhook.SendRelay(p.FoxTrack2APIKey, webhook.RelayURLV2, p.Serial, p.Name, relayPayload); err != nil {
+						log.Printf("[%s] webhook error (v2): %v", p.Name, err)
+					}
+				}
+			}()
+		}
 
 		if (t.Status == "printing" || t.Status == "paused") && p.FoxTrack2APIKey != "" {
 			now := time.Now().Unix()

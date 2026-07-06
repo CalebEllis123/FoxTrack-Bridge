@@ -277,7 +277,7 @@ func (c *Controller) pollLoop(p configpkg.Printer, foxAPIKey, fox2APIKey string,
 				c.sessionMu.Unlock()
 			}
 
-			if err == nil && shouldSendWebhook(prev, &t) {
+			if err == nil && mqttpkg.ShouldSendWebhook(prev, &t) {
 				if foxAPIKey != "" {
 					if err := webhook.SendRelay(foxAPIKey, webhook.URL, p.Name, p.Name, relayPayload); err != nil {
 						log.Printf("[%s] webhook error: %v", p.Name, err)
@@ -351,20 +351,6 @@ func (c *Controller) pollLoop(p configpkg.Printer, foxAPIKey, fox2APIKey string,
 		default:
 		}
 	}
-}
-
-func shouldSendWebhook(prev, curr *mqttpkg.TelemetryData) bool {
-	if prev == nil {
-		return true
-	}
-	return prev.Status != curr.Status ||
-		prev.FileName != curr.FileName ||
-		prev.Progress != curr.Progress ||
-		prev.Error != curr.Error ||
-		int(prev.NozzleTemp) != int(curr.NozzleTemp) ||
-		int(prev.BedTemp) != int(curr.BedTemp) ||
-		prev.LightOn != curr.LightOn ||
-		prev.TimeRemaining != curr.TimeRemaining
 }
 
 func sendJSONRequest(client *http.Client, method, u string, headers map[string]string, body io.Reader) (map[string]interface{}, error) {
