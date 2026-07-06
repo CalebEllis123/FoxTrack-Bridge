@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 type Config struct {
@@ -87,5 +88,52 @@ func SaveConfig(cfg *Config) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0644)
+	return WriteFileAtomic(p, data, 0600)
+}
+
+// WriteFileAtomic writes data to a temp file in the target directory and renames
+// it over path, so a crash mid-write can never leave a truncated or partial file.
+func WriteFileAtomic(path string, data []byte, perm os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename has succeeded
+	if err := tmp.Chmod(perm); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
+}
+
+// BackupCorrupt moves a config file that failed to load aside as
+// config.json.corrupt-<timestamp> so a fresh config can be saved without
+// destroying the original. It checks the preferred path first, then the
+// legacy path, and returns the backup location.
+func BackupCorrupt() (string, error) {
+	p := configPath()
+	if _, err := os.Stat(p); err != nil {
+		legacy := legacyConfigPath()
+		if _, lerr := os.Stat(legacy); lerr != nil {
+			return "", err
+		}
+		p = legacy
+	}
+	backup := p + ".corrupt-" + time.Now().Format("20060102-150405")
+	if err := os.Rename(p, backup); err != nil {
+		return "", err
+	}
+	return backup, nil
 }

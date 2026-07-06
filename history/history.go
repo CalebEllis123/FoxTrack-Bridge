@@ -2,9 +2,12 @@ package history
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"foxtrack-bridge/config"
 )
@@ -60,15 +63,33 @@ func save(records []Record) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(p, data, 0644)
+	return config.WriteFileAtomic(p, data, 0600)
+}
+
+// backupCorrupt moves a history file that failed to load aside as
+// history.json.corrupt-<timestamp> and returns the backup location.
+func backupCorrupt() (string, error) {
+	p := historyPath()
+	backup := p + ".corrupt-" + time.Now().Format("20060102-150405")
+	if err := os.Rename(p, backup); err != nil {
+		return "", err
+	}
+	return backup, nil
 }
 
 // Append adds a record to the history file in a thread-safe manner.
+// Load returns no error for a missing file, so an error here means an existing
+// file failed to load — back it up rather than overwrite the user's history.
 func Append(r Record) error {
 	mu.Lock()
 	defer mu.Unlock()
 	records, err := Load()
 	if err != nil {
+		backup, backupErr := backupCorrupt()
+		if backupErr != nil {
+			return fmt.Errorf("history failed to load (%v) and could not be backed up: %w", err, backupErr)
+		}
+		log.Printf("[history] history failed to load (%v) — backed up to %s, starting a new file", err, backup)
 		records = []Record{}
 	}
 	records = append(records, r)

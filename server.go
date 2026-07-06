@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -72,7 +73,18 @@ func sseEscape(s string) string {
 func StartServer() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		log.Printf("No config found (%v) — starting fresh", err)
+		if errors.Is(err, os.ErrNotExist) {
+			log.Printf("No config found — starting fresh")
+		} else {
+			// The file exists but failed to load. Never start with an empty
+			// config in that case — a later save would overwrite the user's
+			// printers. Move the bad file aside first.
+			backup, backupErr := config.BackupCorrupt()
+			if backupErr != nil {
+				log.Fatalf("ERROR: config failed to load (%v) and could not be backed up (%v) — refusing to start with an empty config; fix or move the file manually", err, backupErr)
+			}
+			log.Printf("ERROR: config failed to load (%v) — the original file was backed up to %s; starting with an empty config", err, backup)
+		}
 		cfg = &config.Config{Printers: []config.Printer{}}
 	}
 
