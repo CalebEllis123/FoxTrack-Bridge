@@ -404,23 +404,27 @@ func handleCamera(w http.ResponseWriter, r *http.Request) {
 		printerName = decodedName
 	}
 
-	// Find the printer config
+	// Find the printer config. Copy it by value while holding the lock — the
+	// delete handler compacts configStore.Printers in place, so a pointer into
+	// the slice would race once the lock is released.
 	configMutex.RLock()
-	var found *config.Printer
+	var found config.Printer
+	ok := false
 	for i := range configStore.Printers {
 		if configStore.Printers[i].Name == printerName {
-			found = &configStore.Printers[i]
+			found = configStore.Printers[i]
+			ok = true
 			break
 		}
 	}
 	configMutex.RUnlock()
 
-	if found == nil {
+	if !ok {
 		http.Error(w, "printer not found", http.StatusNotFound)
 		return
 	}
 
-	if !isBambuPrinterConfig(*found) {
+	if !isBambuPrinterConfig(found) {
 		if err := lanCtrl.ProxyCamera(w, r, found.Name); err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
 		}

@@ -162,11 +162,21 @@ var (
 	sessionMu      sync.Mutex
 )
 
+// copyTelemetry returns a deep copy of s so callers never hold live pointers
+// into the state map, which is mutated concurrently by MQTT handlers.
+func copyTelemetry(s *TelemetryData) *TelemetryData {
+	c := *s
+	if s.AMS != nil {
+		c.AMS = append([]AmsSlot(nil), s.AMS...)
+	}
+	return &c
+}
+
 func GetPrinterState(name string) *TelemetryData {
 	stateMutex.RLock()
 	defer stateMutex.RUnlock()
 	if s, ok := printerStates[name]; ok {
-		return s
+		return copyTelemetry(s)
 	}
 	return &TelemetryData{Status: "disconnected", PrinterID: name}
 }
@@ -184,7 +194,7 @@ func GetPrintersState() map[string]*TelemetryData {
 	defer stateMutex.RUnlock()
 	out := make(map[string]*TelemetryData, len(printerStates))
 	for k, v := range printerStates {
-		out[k] = v
+		out[k] = copyTelemetry(v)
 	}
 	return out
 }
@@ -248,15 +258,10 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 	// sendLights publishes ledctrl to both chamber_light and chamber_light2.
 	// QoS 0: BambuLab's embedded broker does not reliably PUBACK QoS-1 publishes
 	// on the request topic, so QoS 1 always times out. Fire-and-forget is safe on LAN.
-	sendLights := func(mode string) error {
+	sendLights := func(mode string) {
 		for _, node := range []string{"chamber_light", "chamber_light2"} {
-			p := ledPayload(node, mode)
-			tok := client.Publish(topic, 1, false, p)
-			if err := tok.Error(); err != nil {
-				return fmt.Errorf("light command failed for %q: %w", printerName, err)
-			}
+			client.Publish(topic, 0, false, ledPayload(node, mode))
 		}
-		return nil
 	}
 
 	// applyLightResult applies optimistic state and requests a fresh pushall.
@@ -278,17 +283,13 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 		payload = `{"print":{"sequence_id":"0","command":"stop"}}`
 
 	case "light_on":
-		if err := sendLights("on"); err != nil {
-			return err
-		}
+		sendLights("on")
 		log.Printf("[%s] sent command: light_on", printerName)
 		applyLightResult(true)
 		return nil
 
 	case "light_off":
-		if err := sendLights("off"); err != nil {
-			return err
-		}
+		sendLights("off")
 		log.Printf("[%s] sent command: light_off", printerName)
 		applyLightResult(false)
 		return nil
@@ -303,9 +304,7 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 		if *on {
 			mode = "on"
 		}
-		if err := sendLights(mode); err != nil {
-			return err
-		}
+		sendLights(mode)
 		log.Printf("[%s] sent command: light (%s)", printerName, mode)
 		applyLightResult(*on)
 		return nil
@@ -316,9 +315,7 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 		if wantOn {
 			mode = "on"
 		}
-		if err := sendLights(mode); err != nil {
-			return err
-		}
+		sendLights(mode)
 		log.Printf("[%s] sent command: toggle_light (%s)", printerName, mode)
 		applyLightResult(wantOn)
 		return nil
@@ -485,10 +482,7 @@ func SendCommandWithArgs(printerName, command string, args map[string]interface{
 	}
 
 	// QoS 0: same reasoning as sendLights above — BambuLab broker drops QoS-1 PUBACKs.
-	token := client.Publish(topic, 1, false, payload)
-	if err := token.Error(); err != nil {
-		return fmt.Errorf("command %q failed for printer %q: %w", command, printerName, err)
-	}
+	client.Publish(topic, 0, false, payload)
 	log.Printf("[%s] sent command: %s", printerName, command)
 
 	// After filament settings change, the printer won't broadcast an update automatically.
@@ -679,9 +673,13 @@ func connectAndListen(p Printer) error {
 
 	topic := fmt.Sprintf("device/%s/report", p.Serial)
 	subToken := client.Subscribe(topic, 0, makeHandler(p))
-	if subToken.WaitTimeout(10*time.Second) && subToken.Error() != nil {
+	if !subToken.WaitTimeout(10 * time.Second) {
 		client.Disconnect(250)
-		return subToken.Error()
+		return fmt.Errorf("subscribe to %s timed out", topic)
+	}
+	if err := subToken.Error(); err != nil {
+		client.Disconnect(250)
+		return err
 	}
 	log.Printf("[%s] subscribed to %s", p.Name, topic)
 
@@ -716,7 +714,7 @@ func connectAndListen(p Printer) error {
 
 func sendPushall(client mqtt.Client, printerName, requestTopic string) {
 	payload := `{"pushing": {"sequence_id": "0", "command": "pushall"}}`
-	client.Publish(requestTopic, 1, false, payload)
+	client.Publish(requestTopic, 0, false, payload)
 	log.Printf("[%s] sent pushall", printerName)
 }
 
@@ -841,11 +839,13 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 				}
 			} else if pr.Ams.TrayNow != "" {
 				// Incremental update — only tray_now changed (e.g. at print start).
-				// Update Active flags on the existing slot list rather than wiping it.
+				// Update Active flags on a copy of the existing slot list rather than
+				// mutating the previous state's slice in place.
 				trayNow := -1
 				if n, err := strconv.Atoi(pr.Ams.TrayNow); err == nil && n < 254 {
 					trayNow = n
 				}
+				amsSlots = append([]AmsSlot(nil), amsSlots...)
 				for i := range amsSlots {
 					amsSlots[i].Active = amsSlots[i].Slot == trayNow
 				}

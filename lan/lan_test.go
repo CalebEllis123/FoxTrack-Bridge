@@ -10,9 +10,15 @@ import (
 
 func TestFetchKlipperTelemetry_MapsFieldsAndUsesHeader(t *testing.T) {
 	const expectedPath = "/printer/objects/query"
-	const expectedQuery = "print_stats&heater_bed&extruder&display_status&virtual_sdcard"
+	const expectedQuery = "print_stats&heater_bed&extruder&extruder1&extruder2&extruder3&toolhead&fan&display_status&virtual_sdcard"
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// fetchKlipperTelemetry also polls lifetime hours; answer with an empty summary.
+		if r.URL.Path == "/server/history/summary" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"result": {"job_totals": {}}}`))
+			return
+		}
 		if r.URL.Path != expectedPath {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
