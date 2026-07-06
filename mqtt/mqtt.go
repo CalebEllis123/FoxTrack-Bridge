@@ -129,9 +129,10 @@ var (
 	sequenceID     uint64
 	sequenceMu     sync.Mutex
 
-	// managedPrinters tracks which printer names have an active connection goroutine.
-	// Prevents duplicate goroutines when ConnectPrinter is called redundantly.
-	managedPrinters   = make(map[string]bool)
+	// managedPrinters tracks the active connection goroutine per printer name.
+	// Prevents duplicate goroutines when ConnectPrinter is called redundantly
+	// and lets DisconnectPrinter stop a goroutine and wait for it to exit.
+	managedPrinters   = make(map[string]*managedConn)
 	managedPrintersMu sync.Mutex
 
 	// snapshot throttle: last capture time and in-flight guard per printer.
@@ -145,6 +146,16 @@ var (
 	webhookLastSent   = make(map[string]int64)
 	webhookLastSentMu sync.Mutex
 )
+
+// managedConn is the cancellation handle for one printer's management goroutine,
+// mirroring lan.Controller's cancelers. stop is closed to ask the goroutine to
+// shut down; done is closed by the goroutine once it has fully exited, so
+// DisconnectPrinter can block until no old goroutine can race a reconnect.
+type managedConn struct {
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
+}
 
 func nextSequenceID() string {
 	sequenceMu.Lock()
@@ -576,9 +587,21 @@ func getSerial(name string) string {
 	return printerSerials[name]
 }
 
-// DisconnectPrinter stops the management goroutine for the named printer so that
-// a subsequent ConnectPrinter call can start a fresh one (e.g. after IP/LAN code change).
+// DisconnectPrinter stops the management goroutine for the named printer and
+// blocks until it has fully exited, so a subsequent ConnectPrinter call can
+// start a fresh one (e.g. after IP/LAN code change) without racing the old
+// goroutine's shutdown. No-op if the printer has no active goroutine.
 func DisconnectPrinter(name string) {
+	managedPrintersMu.Lock()
+	mc := managedPrinters[name]
+	managedPrintersMu.Unlock()
+	if mc == nil {
+		return
+	}
+	mc.stopOnce.Do(func() { close(mc.stop) })
+
+	// Drop the current client so commands fail fast and the connect loop's
+	// wait returns promptly instead of idling until the next keepalive.
 	clientMutex.Lock()
 	if c, ok := printerClients[name]; ok {
 		c.Disconnect(250)
@@ -586,9 +609,37 @@ func DisconnectPrinter(name string) {
 	}
 	clientMutex.Unlock()
 
-	managedPrintersMu.Lock()
-	delete(managedPrinters, name)
-	managedPrintersMu.Unlock()
+	<-mc.done
+}
+
+// RemovePrinterState deletes all per-printer state this package keeps for the
+// named printer: telemetry, serial mapping, snapshot throttle, webhook dedup,
+// and any active print session. Call after DisconnectPrinter when the printer
+// is being removed (not just restarted).
+func RemovePrinterState(name string) {
+	stateMutex.Lock()
+	delete(printerStates, name)
+	stateMutex.Unlock()
+
+	serialMutex.Lock()
+	delete(printerSerials, name)
+	serialMutex.Unlock()
+
+	sessionMu.Lock()
+	delete(activeSessions, name)
+	sessionMu.Unlock()
+
+	snapLastTMu.Lock()
+	delete(snapLastT, name)
+	snapLastTMu.Unlock()
+
+	snapInFlightMu.Lock()
+	delete(snapInFlight, name)
+	snapInFlightMu.Unlock()
+
+	webhookLastSentMu.Lock()
+	delete(webhookLastSent, name)
+	webhookLastSentMu.Unlock()
 }
 
 func ConnectPrinter(p Printer) {
@@ -598,11 +649,12 @@ func ConnectPrinter(p Printer) {
 	// running for this printer (e.g. syncPrinterConnections called redundantly on
 	// settings save), do nothing — the existing goroutine handles reconnects.
 	managedPrintersMu.Lock()
-	if managedPrinters[p.Name] {
+	if managedPrinters[p.Name] != nil {
 		managedPrintersMu.Unlock()
 		return
 	}
-	managedPrinters[p.Name] = true
+	mc := &managedConn{stop: make(chan struct{}), done: make(chan struct{})}
+	managedPrinters[p.Name] = mc
 	managedPrintersMu.Unlock()
 
 	go func() {
@@ -611,20 +663,33 @@ func ConnectPrinter(p Printer) {
 				log.Printf("[%s] MQTT connection goroutine panic: %v", p.Name, r)
 			}
 			managedPrintersMu.Lock()
-			delete(managedPrinters, p.Name)
+			if managedPrinters[p.Name] == mc {
+				delete(managedPrinters, p.Name)
+			}
 			managedPrintersMu.Unlock()
+			close(mc.done)
 		}()
 		for {
-			err := connectAndListen(p)
-			if err != nil {
-				log.Printf("[%s] disconnected: %v — retrying in 5s", p.Name, err)
-			}
+			err := connectAndListen(p, mc.stop)
 
 			// Remove client immediately so commands fail fast rather than
 			// hitting a disconnected client.
 			clientMutex.Lock()
 			delete(printerClients, p.Name)
 			clientMutex.Unlock()
+
+			// Stop requested — exit without touching state, so a replacement
+			// goroutine (or the delete handler) sees no stale writes.
+			select {
+			case <-mc.stop:
+				log.Printf("[%s] MQTT connection stopped", p.Name)
+				return
+			default:
+			}
+
+			if err != nil {
+				log.Printf("[%s] disconnected: %v — retrying in 5s", p.Name, err)
+			}
 
 			// Always update status to disconnected right away so the UI
 			// disables controls instead of showing stale "idle/printing" state.
@@ -634,12 +699,19 @@ func ConnectPrinter(p Printer) {
 				Timestamp: time.Now().Unix(),
 			})
 
-			time.Sleep(5 * time.Second)
+			select {
+			case <-mc.stop:
+				log.Printf("[%s] MQTT connection stopped", p.Name)
+				return
+			case <-time.After(5 * time.Second):
+			}
 		}
 	}()
 }
 
-func connectAndListen(p Printer) error {
+// connectAndListen runs one MQTT session for p. It returns when the connection
+// drops or when stop is closed; on stop it disconnects cleanly and returns nil.
+func connectAndListen(p Printer, stop <-chan struct{}) error {
 	broker := fmt.Sprintf("ssl://%s:8883", p.IP)
 	done := make(chan struct{})
 
@@ -704,6 +776,8 @@ func connectAndListen(p Printer) error {
 			select {
 			case <-done:
 				return
+			case <-stop:
+				return
 			case <-ticker.C:
 				if client.IsConnected() {
 					sendPushall(client, p.Name, requestTopic)
@@ -712,9 +786,14 @@ func connectAndListen(p Printer) error {
 		}
 	}()
 
-	<-done
-	client.Disconnect(250)
-	return fmt.Errorf("connection lost")
+	select {
+	case <-done:
+		client.Disconnect(250)
+		return fmt.Errorf("connection lost")
+	case <-stop:
+		client.Disconnect(250)
+		return nil
+	}
 }
 
 func sendPushall(client mqtt.Client, printerName, requestTopic string) {

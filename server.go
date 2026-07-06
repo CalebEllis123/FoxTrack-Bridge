@@ -96,7 +96,7 @@ func StartServer() {
 	configStore = cfg
 	configMutex.Unlock()
 
-	syncPrinterConnections(cfg)
+	syncPrinterConnections(nil, cfg)
 	go autoUpdateLoop()
 	go pollBridgeCommands()
 
@@ -667,9 +667,10 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		}
 		configMutex.Lock()
 		applyStoredSecrets(&newCfg, configStore)
+		oldCfg := configStore
 		configStore = &newCfg
 		configMutex.Unlock()
-		syncPrinterConnections(&newCfg)
+		syncPrinterConnections(oldCfg, &newCfg)
 		if err := config.SaveConfig(&newCfg); err != nil {
 			log.Printf("Warning: failed to save config: %v", err)
 		}
@@ -744,16 +745,52 @@ func handlePrinterByName(w http.ResponseWriter, r *http.Request) {
 	cfg := configStore
 	configMutex.Unlock()
 	_ = config.SaveConfig(cfg)
+	// Stop whichever connection type the printer had. Both calls are no-ops
+	// for names they don't manage, so no need to know which type it was.
+	mqttpkg.DisconnectPrinter(name)
+	mqttpkg.RemovePrinterState(name)
 	lanCtrl.RemovePrinter(name)
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
-func syncPrinterConnections(cfg *config.Config) {
-	for _, p := range cfg.Printers {
-		if isBambuPrinterConfig(p) {
-			mqttpkg.ConnectPrinter(mqttPrinter(p, cfg))
+// syncPrinterConnections reconciles running printer connections with cfg.
+// oldCfg is the previously active config (nil at startup): Bambu printers whose
+// connection-relevant fields (IP, serial, LAN code, webhook keys) changed are
+// restarted, removed ones are disconnected and their state cleaned up, and
+// unchanged ones are left untouched so their telemetry never blips.
+func syncPrinterConnections(oldCfg, cfg *config.Config) {
+	oldBambu := map[string]mqttpkg.Printer{}
+	if oldCfg != nil {
+		for _, p := range oldCfg.Printers {
+			if isBambuPrinterConfig(p) {
+				oldBambu[p.Name] = mqttPrinter(p, oldCfg)
+			}
 		}
 	}
+
+	for _, p := range cfg.Printers {
+		if !isBambuPrinterConfig(p) {
+			continue
+		}
+		newP := mqttPrinter(p, cfg)
+		if old, ok := oldBambu[p.Name]; ok {
+			delete(oldBambu, p.Name)
+			if old == newP {
+				continue // unchanged — leave the running connection alone
+			}
+			log.Printf("[%s] connection settings changed — restarting MQTT connection", p.Name)
+			mqttpkg.DisconnectPrinter(p.Name)
+		}
+		mqttpkg.ConnectPrinter(newP)
+	}
+
+	// Bambu printers no longer in cfg (deleted, or switched to Klipper):
+	// stop their goroutines and drop all per-printer state.
+	for name := range oldBambu {
+		mqttpkg.DisconnectPrinter(name)
+		mqttpkg.RemovePrinterState(name)
+	}
+
 	lanCtrl.SyncPrinters(cfg.Printers, cfg.APIKey, cfg.FoxTrack2APIKey)
 }
 
