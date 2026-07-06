@@ -154,3 +154,16 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: ${{ matrix.asset }}
+
+  checksums:
+    name: Generate checksums
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Generate and upload checksums.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --pattern 'FoxTrack-Bridge-*' --dir assets
+          (cd assets && sha256sum *) > checksums.txt
+          gh release upload "${GITHUB_REF_NAME}" checksums.txt --repo "${GITHUB_REPOSITORY}" --clobber
