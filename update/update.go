@@ -74,6 +74,24 @@ var (
 	pendingUpdate *stagedUpdate
 )
 
+// CanReplaceExecutable reports whether the directory containing the running
+// binary is writable, i.e. whether a staged update can be moved into place.
+// Inside Docker (or any install owned by another user) this is false and
+// self-update cannot work.
+func CanReplaceExecutable() bool {
+	exePath, err := os.Executable()
+	if err != nil {
+		return false
+	}
+	f, err := os.CreateTemp(filepath.Dir(exePath), ".foxtrack-writecheck-*")
+	if err != nil {
+		return false
+	}
+	f.Close()
+	os.Remove(f.Name())
+	return true
+}
+
 func CheckLatest(ctx context.Context) (CheckResult, error) {
 	cacheMu.Lock()
 	if time.Since(cachedAt) < 15*time.Minute && !cachedAt.IsZero() {
@@ -96,7 +114,7 @@ func CheckLatest(ctx context.Context) (CheckResult, error) {
 	res.ReleaseURL = rel.HTMLURL
 	res.Available = version.Compare(current, rel.TagName) < 0
 	res.PendingRestart = HasPendingRestart()
-	res.CanAutoInstall = canInstall
+	res.CanAutoInstall = canInstall && CanReplaceExecutable()
 	res.AssetName = asset.Name
 	res.Notes = rel.Body
 
@@ -184,6 +202,10 @@ func pickAssetFor(assets []releaseAsset, goos, goarch, buildVariant string) (Ass
 }
 
 func StartInstall(ctx context.Context) error {
+	if !CanReplaceExecutable() {
+		return fmt.Errorf("the binary location is read-only, update by pulling a new image or replacing the binary")
+	}
+
 	pendingMu.Lock()
 	if pendingUpdate != nil {
 		pendingMu.Unlock()
@@ -319,10 +341,24 @@ func stageWindowsUpdate(tmpDir, downloadPath, exePath string) (string, error) {
 
 func stageLinuxUpdate(tmpDir, downloadPath, exePath string) (string, error) {
 	scriptPath := filepath.Join(tmpDir, "apply-update.sh")
+	// Wait for the old process to exit before touching the binary, then
+	// rename a same-directory copy into place: overwriting a running
+	// executable fails with ETXTBSY, a rename never does.
+	stagedPath := exePath + ".update"
+	pid := os.Getpid()
 	script := "#!/bin/sh\nset -e\n" +
-		"sleep 1\n" +
-		fmt.Sprintf("cp \"%s\" \"%s\"\n", downloadPath, exePath) +
-		fmt.Sprintf("chmod +x \"%s\"\n", exePath) +
+		"waited=0\n" +
+		fmt.Sprintf("while kill -0 %d 2>/dev/null; do\n", pid) +
+		"  if [ \"$waited\" -ge 30 ]; then\n" +
+		fmt.Sprintf("    echo \"timed out waiting for pid %d to exit\" >&2\n", pid) +
+		"    exit 1\n" +
+		"  fi\n" +
+		"  sleep 1\n" +
+		"  waited=$((waited+1))\n" +
+		"done\n" +
+		fmt.Sprintf("cp \"%s\" \"%s\"\n", downloadPath, stagedPath) +
+		fmt.Sprintf("chmod +x \"%s\"\n", stagedPath) +
+		fmt.Sprintf("mv \"%s\" \"%s\"\n", stagedPath, exePath) +
 		fmt.Sprintf("\"%s\" >/dev/null 2>&1 &\n", exePath)
 	if err := os.WriteFile(scriptPath, []byte(script), 0755); err != nil {
 		return "", err

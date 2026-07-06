@@ -746,12 +746,18 @@ func isBambuPrinterConfig(p config.Printer) bool {
 // user has a chance to disable it if needed), then checks every hour.
 func autoUpdateLoop() {
 	time.Sleep(2 * time.Minute)
+	loggedReadOnly := false
 	for {
 		configMutex.RLock()
 		enabled := configStore != nil && configStore.AutoUpdate
 		configMutex.RUnlock()
 
-		if enabled {
+		if enabled && !update.CanReplaceExecutable() {
+			if !loggedReadOnly {
+				log.Printf("[auto-update] unavailable in this environment: the binary location is read-only — update by pulling a new image or replacing the binary")
+				loggedReadOnly = true
+			}
+		} else if enabled {
 			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 			result, err := update.CheckLatest(ctx)
 			cancel()
@@ -769,7 +775,7 @@ func autoUpdateLoop() {
 					if err := update.RestartToApply(); err != nil {
 						log.Printf("[auto-update] restart failed: %v", err)
 					} else {
-						time.Sleep(2 * time.Second)
+						time.Sleep(700 * time.Millisecond)
 						os.Exit(0)
 					}
 				}

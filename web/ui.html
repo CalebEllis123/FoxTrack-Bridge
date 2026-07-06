@@ -71,6 +71,8 @@
     <div class="w-full max-w-md rounded-2xl border border-zinc-800 bg-zinc-900 p-6 shadow-2xl">
         <h3 class="text-sm font-semibold">Update Available</h3>
         <p class="mt-2 text-xs text-zinc-400">FoxTrack Bridge <span id="updateVersionLabel" class="text-white font-semibold"></span> is available. Your printers and settings are preserved.</p>
+        <p id="updateHowTo" class="mt-3 hidden text-xs text-zinc-400">Auto-update isn't available here. If you're running the Docker image, pull the new image; otherwise <a id="updateDownloadLink" href="#" target="_blank" rel="noopener" class="text-white underline">download the release</a> and replace the binary.</p>
+        <div id="updateNotes" class="mt-3 hidden max-h-40 overflow-y-auto whitespace-pre-wrap rounded-lg border border-zinc-800 bg-zinc-950 p-3 text-xs text-zinc-400"></div>
         <p id="updateProgress" class="mt-3 hidden text-xs text-zinc-400"></p>
         <div class="mt-5 flex flex-wrap gap-2">
             <button id="updateNowBtn" onclick="installUpdate()" class="btn-primary">Update Now</button>
@@ -1332,6 +1334,9 @@ async function refreshGlobalHistory() {
 
 function setFooterVersion(v) { const el=document.getElementById('footerVersion'); if(el) el.textContent='v'+(v||'dev'); }
 
+const DISMISSED_UPDATE_KEY = 'foxtrackDismissedUpdate';
+function getDismissedUpdate() { try { return localStorage.getItem(DISMISSED_UPDATE_KEY); } catch(_) { return null; } }
+
 function showUpdateModal(info) {
     updateInfo = info;
     const modal = document.getElementById('updateModal');
@@ -1340,10 +1345,25 @@ function showUpdateModal(info) {
     if (!modal||!label) return;
     label.textContent = info.latestVersion || 'new version';
     if (rb) rb.classList.toggle('hidden', !(info&&info.pendingRestart));
+    const canInstall = !!info.canAutoInstall;
+    const nb = document.getElementById('updateNowBtn');
+    if (nb) nb.classList.toggle('hidden', !canInstall);
+    const howTo = document.getElementById('updateHowTo');
+    if (howTo) howTo.classList.toggle('hidden', canInstall);
+    const link = document.getElementById('updateDownloadLink');
+    if (link && info.releaseUrl) link.href = info.releaseUrl;
+    const notes = document.getElementById('updateNotes');
+    if (notes) {
+        notes.textContent = info.notes || '';
+        notes.classList.toggle('hidden', canInstall || !info.notes);
+    }
     modal.classList.remove('hidden');
 }
 
-function dismissUpdateModal() { document.getElementById('updateModal').classList.add('hidden'); }
+function dismissUpdateModal() {
+    if (updateInfo && updateInfo.latestVersion) { try { localStorage.setItem(DISMISSED_UPDATE_KEY, updateInfo.latestVersion); } catch(_){} }
+    document.getElementById('updateModal').classList.add('hidden');
+}
 function openReleaseNotes() { if(updateInfo&&updateInfo.releaseUrl) window.open(updateInfo.releaseUrl,'_blank','noopener'); }
 
 function setUpdateProgress(text, isError=false) {
@@ -1356,7 +1376,12 @@ function setUpdateProgress(text, isError=false) {
 
 async function checkForUpdate() {
     try { const vi=await apiFetch('/api/version'); setFooterVersion(vi&&vi.version?vi.version:'dev'); } catch(_){ setFooterVersion('dev'); }
-    try { const info=await apiFetch('/api/update/check'); if(info&&(info.available||info.pendingRestart)) showUpdateModal(info); } catch(_){}
+    try {
+        const info=await apiFetch('/api/update/check');
+        if(info&&(info.available||info.pendingRestart)) {
+            if (info.pendingRestart || getDismissedUpdate() !== info.latestVersion) showUpdateModal(info);
+        }
+    } catch(_){}
 }
 
 async function installUpdate() {
