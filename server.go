@@ -168,7 +168,6 @@ func printStartupBanner() {
 // handleLogs streams log lines to the browser as SSE (Server-Sent Events).
 func handleLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "OPTIONS" {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		return
 	}
 	flusher, ok := w.(http.Flusher)
@@ -179,7 +178,6 @@ func handleLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 
 	// Send existing buffered lines on connect.
 	logBufMu.Lock()
@@ -229,10 +227,9 @@ func mqttPrinter(p config.Printer, cfg *config.Config) mqttpkg.Printer {
 	}
 }
 
-func cors(w http.ResponseWriter) {
-	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-	w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+// jsonHeaders sets the response content type for JSON API endpoints. The
+// dashboard is served same-origin, so no CORS headers are sent.
+func jsonHeaders(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "application/json")
 }
 
@@ -247,7 +244,7 @@ func handleLogo(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	merged := mqttpkg.GetPrintersState()
 	for k, v := range lanCtrl.GetStates() {
 		merged[k] = v
@@ -256,7 +253,7 @@ func handleStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleVersion(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
@@ -268,7 +265,7 @@ func handleVersion(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
@@ -291,7 +288,7 @@ func handleUpdateCheck(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
@@ -313,7 +310,7 @@ func handleUpdateInstall(w http.ResponseWriter, r *http.Request) {
 }
 
 func handleUpdateRestart(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
@@ -343,7 +340,7 @@ func handleUpdateRestart(w http.ResponseWriter, r *http.Request) {
 // URL: /api/control/{printerName}/{command}
 // Commands: pause, resume, stop, light_on, light_off
 func handleControl(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
@@ -398,7 +395,6 @@ func handleControl(w http.ResponseWriter, r *http.Request) {
 // BambuLab streams MJPEG on port 6000 with basic auth (bblp:lancode).
 func handleCamera(w http.ResponseWriter, r *http.Request) {
 	if r.Method == "OPTIONS" {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		return
 	}
 
@@ -480,7 +476,6 @@ func bambuCameraStream(w http.ResponseWriter, ip, lanCode, printerName string) {
 	const boundary = "bambu"
 	w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary="+boundary)
 	w.Header().Set("Cache-Control", "no-cache, no-store")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
 	w.WriteHeader(http.StatusOK)
 	flusher, _ := w.(http.Flusher)
 
@@ -518,7 +513,7 @@ func bambuCameraStream(w http.ResponseWriter, ip, lanCode, printerName string) {
 }
 
 func handleTest(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	if r.Method != "POST" {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -566,15 +561,100 @@ func handleTest(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(resp)
 }
 
+// redactedPrinter mirrors config.Printer for API responses, with the secret
+// fields (LAN access code, Moonraker API key) blanked and replaced by
+// "is set" flags so the UI can show that a value exists without seeing it.
+type redactedPrinter struct {
+	Name         string `json:"name"`
+	IP           string `json:"ip,omitempty"`
+	Serial       string `json:"serial,omitempty"`
+	LANCode      string `json:"lan_code"`
+	LANCodeSet   bool   `json:"lan_code_set"`
+	MoonrakerURL string `json:"moonraker_url,omitempty"`
+	APIKey       string `json:"api_key"`
+	APIKeySet    bool   `json:"api_key_set"`
+	WebcamURL    string `json:"webcam_url,omitempty"`
+}
+
+// redactedConfig mirrors config.Config with the FoxTrack cloud tokens blanked
+// the same way. Secrets never leave the server.
+type redactedConfig struct {
+	APIKey             string            `json:"api_key"`
+	APIKeySet          bool              `json:"api_key_set"`
+	FoxTrack2APIKey    string            `json:"foxtrack2_api_key"`
+	FoxTrack2APIKeySet bool              `json:"foxtrack2_api_key_set"`
+	Printers           []redactedPrinter `json:"printers"`
+	AutoUpdate         bool              `json:"auto_update,omitempty"`
+}
+
+func redactPrinter(p config.Printer) redactedPrinter {
+	return redactedPrinter{
+		Name:         p.Name,
+		IP:           p.IP,
+		Serial:       p.Serial,
+		LANCodeSet:   p.LANCode != "",
+		MoonrakerURL: p.MoonrakerURL,
+		APIKeySet:    p.APIKey != "",
+		WebcamURL:    p.WebcamURL,
+	}
+}
+
+func redactConfig(cfg *config.Config) redactedConfig {
+	out := redactedConfig{
+		APIKeySet:          cfg.APIKey != "",
+		FoxTrack2APIKeySet: cfg.FoxTrack2APIKey != "",
+		Printers:           make([]redactedPrinter, len(cfg.Printers)),
+		AutoUpdate:         cfg.AutoUpdate,
+	}
+	for i, p := range cfg.Printers {
+		out.Printers[i] = redactPrinter(p)
+	}
+	return out
+}
+
+// applyStoredSecrets fills empty secret fields on an incoming config from the
+// currently stored one. The dashboard posts back the redacted config it
+// received, so an empty secret means "keep the existing value" — only a
+// non-empty value replaces a stored secret. Printers are matched by name.
+// The caller must hold configMutex.
+func applyStoredSecrets(newCfg, old *config.Config) {
+	if old == nil {
+		return
+	}
+	if newCfg.APIKey == "" {
+		newCfg.APIKey = old.APIKey
+	}
+	if newCfg.FoxTrack2APIKey == "" {
+		newCfg.FoxTrack2APIKey = old.FoxTrack2APIKey
+	}
+	oldByName := make(map[string]config.Printer, len(old.Printers))
+	for _, p := range old.Printers {
+		oldByName[p.Name] = p
+	}
+	for i := range newCfg.Printers {
+		p := &newCfg.Printers[i]
+		prev, ok := oldByName[p.Name]
+		if !ok {
+			continue
+		}
+		if p.LANCode == "" {
+			p.LANCode = prev.LANCode
+		}
+		if p.APIKey == "" {
+			p.APIKey = prev.APIKey
+		}
+	}
+}
+
 func handleConfig(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	switch r.Method {
 	case "OPTIONS":
 		return
 	case "GET":
 		configMutex.RLock()
 		defer configMutex.RUnlock()
-		json.NewEncoder(w).Encode(configStore)
+		json.NewEncoder(w).Encode(redactConfig(configStore))
 	case "POST":
 		var newCfg config.Config
 		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
@@ -582,6 +662,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		configMutex.Lock()
+		applyStoredSecrets(&newCfg, configStore)
 		configStore = &newCfg
 		configMutex.Unlock()
 		syncPrinterConnections(&newCfg)
@@ -595,14 +676,18 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func handlePrinters(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	switch r.Method {
 	case "OPTIONS":
 		return
 	case "GET":
 		configMutex.RLock()
-		defer configMutex.RUnlock()
-		json.NewEncoder(w).Encode(configStore.Printers)
+		printers := make([]redactedPrinter, len(configStore.Printers))
+		for i, p := range configStore.Printers {
+			printers[i] = redactPrinter(p)
+		}
+		configMutex.RUnlock()
+		json.NewEncoder(w).Encode(printers)
 	case "POST":
 		var p config.Printer
 		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
@@ -631,7 +716,7 @@ func handlePrinters(w http.ResponseWriter, r *http.Request) {
 
 // handlePrinterByName handles DELETE /api/printers/{name}
 func handlePrinterByName(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
@@ -681,7 +766,7 @@ func printerIsBambu(name string) bool {
 
 // handleHistory returns all print history records as JSON.
 func handleHistory(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	if r.Method == "OPTIONS" {
 		return
 	}
@@ -701,7 +786,7 @@ func handleHistory(w http.ResponseWriter, r *http.Request) {
 // handleHistoryByPrinter returns print history for a single printer.
 // URL: /api/history/{printerName}
 func handleHistoryByPrinter(w http.ResponseWriter, r *http.Request) {
-	cors(w)
+	jsonHeaders(w)
 	if r.Method == "OPTIONS" {
 		return
 	}

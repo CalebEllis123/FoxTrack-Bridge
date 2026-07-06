@@ -160,7 +160,6 @@ func (c *Controller) ProxyCamera(w http.ResponseWriter, _ *http.Request, name st
 			contentType = "image/jpeg"
 		}
 		w.Header().Set("Content-Type", contentType)
-		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Cache-Control", "no-cache")
 		w.WriteHeader(http.StatusOK)
 		_, _ = io.Copy(w, resp.Body)

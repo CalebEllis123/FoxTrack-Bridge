@@ -436,7 +436,7 @@ function detectStatusTransitions() {
 }
 
 function printerTypeLabel(p) {
-    return (p && p.serial && p.lan_code && !p.moonraker_url) ? 'Bambu' : 'Klipper';
+    return (p && p.serial && (p.lan_code || p.lan_code_set) && !p.moonraker_url) ? 'Bambu' : 'Klipper';
 }
 
 function toast(msg, type = 'success') {
@@ -559,11 +559,18 @@ function setBridgeStatus(online) {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
+// The server never returns stored secrets — only *_set flags. Show a masked
+// placeholder when a key is saved; leaving the field blank on save keeps it.
+function updateSecretPlaceholder(id, isSet) {
+    const el = document.getElementById(id);
+    if (el) el.placeholder = isSet ? '••••••••  saved — leave blank to keep' : 'Paste API key (optional)';
+}
+
 async function loadConfig() {
     try {
         const cfg = await apiFetch('/api/config');
-        if (cfg && cfg.api_key) document.getElementById('apiKey').value = cfg.api_key;
-        if (cfg && cfg.foxtrack2_api_key) document.getElementById('foxtrack2ApiKey').value = cfg.foxtrack2_api_key;
+        updateSecretPlaceholder('apiKey', !!(cfg && cfg.api_key_set));
+        updateSecretPlaceholder('foxtrack2ApiKey', !!(cfg && cfg.foxtrack2_api_key_set));
         configuredPrinters = (cfg && cfg.printers) ? cfg.printers : [];
         if (cfg && cfg.auto_update) applyAutoUpdateState(true);
         setBridgeStatus(true);
@@ -579,19 +586,21 @@ function buildConfigPayload() {
     };
 }
 
-async function saveLegacyApiKey() {
+async function saveApiKeys() {
     try {
         await apiFetch('/api/config', { method:'POST', body:JSON.stringify(buildConfigPayload()) });
+        // Both typed keys (if any) are now stored server-side; clear the
+        // inputs and re-fetch so the placeholders reflect the saved state.
+        document.getElementById('apiKey').value = '';
+        document.getElementById('foxtrack2ApiKey').value = '';
+        await loadConfig();
         toast('Settings saved');
     } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
-async function saveFoxtrack2ApiKey() {
-    try {
-        await apiFetch('/api/config', { method:'POST', body:JSON.stringify(buildConfigPayload()) });
-        toast('Settings saved');
-    } catch (e) { toast('Failed: ' + e.message, 'error'); }
-}
+async function saveLegacyApiKey() { await saveApiKeys(); }
+
+async function saveFoxtrack2ApiKey() { await saveApiKeys(); }
 
 // ── Add Printer Modal ─────────────────────────────────────────────────────────
 
@@ -887,7 +896,7 @@ function printerCard(printer) {
     const coolingFanPct = live && live.cooling_fan_pct > 0 ? live.cooling_fan_pct : null;
     const filamentUsedMM = live && live.filament_used_mm > 0 ? live.filament_used_mm : null;
     const enc = encodeURIComponent(printer.name);
-    const isBambu = !!(printer.serial && printer.lan_code && !printer.moonraker_url);
+    const isBambu = !!(printer.serial && (printer.lan_code || printer.lan_code_set) && !printer.moonraker_url);
     const typeLabel = isBambu ? 'Bambu' : 'Klipper';
 
     const sel = removeMode && selectedForRemoval.has(printer.name);
