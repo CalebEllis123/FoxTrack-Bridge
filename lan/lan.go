@@ -477,6 +477,7 @@ func fetchKlipperTelemetry(p configpkg.Printer) (mqttpkg.TelemetryData, webhook.
 			NozzleTargetTemper: floatAny(anyFromMap(extruder, "target")),
 			BedTemper:          floatAny(anyFromMap(bed, "temperature")),
 			BedTargetTemper:    floatAny(anyFromMap(bed, "target")),
+			McRemainingTime:    remaining,
 			ActiveExtruder:     activeExtruderField,
 		},
 	}

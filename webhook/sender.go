@@ -122,6 +122,7 @@ type RelayPrint struct {
 	NozzleTargetTemper float64        `json:"nozzle_target_temper"`
 	BedTemper          float64        `json:"bed_temper"`
 	BedTargetTemper    float64        `json:"bed_target_temper"`
+	McRemainingTime    int            `json:"mc_remaining_time,omitempty"` // minutes
 	ActiveExtruder     string         `json:"active_extruder,omitempty"`
 	LightOn            *bool          `json:"light_on,omitempty"`  // nil when not reported (Klipper)
 	Ams                []RelayAmsSlot `json:"ams,omitempty"`       // nil for Klipper or printers without AMS

@@ -1105,6 +1105,7 @@ func makeHandler(p Printer) mqtt.MessageHandler {
 						NozzleTargetTemper: nozzleTarget,
 						BedTemper:          bedTemp,
 						BedTargetTemper:    bedTarget,
+						McRemainingTime:    timeRemaining,
 						LightOn:            &b,
 						Ams:                relayAms,
 					},
