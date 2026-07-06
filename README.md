@@ -137,6 +137,15 @@ go build -ldflags="-s -w" -o foxtrack-bridge .
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags headless -ldflags="-s -w" -o foxtrack-bridge-arm .
 ```
 
+**Docker:**
+
+```bash
+docker build --build-arg APP_VERSION=v2.1.4 -t foxtrack-bridge .
+docker run -d --name foxtrack-bridge -p 8080:8080 -v foxtrack-bridge-data:/data --restart unless-stopped foxtrack-bridge
+```
+
+See [Docker documentation](docs/docker.md) for fork, branch, and server deployment examples.
+
 **Run tests:**
 
 ```bash
