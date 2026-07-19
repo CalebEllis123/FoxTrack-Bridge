@@ -102,6 +102,8 @@ func StartServer() {
 
 	http.HandleFunc("/", handleRoot)
 	http.HandleFunc("/logo.png", handleLogo)
+	http.HandleFunc("/tailwind.css", cssHandler(tailwindCSS))
+	http.HandleFunc("/icons.css", cssHandler(iconsCSS))
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/printers", handlePrinters)
 	http.HandleFunc("/api/printers/", handlePrinterByName) // DELETE /api/printers/{name}
@@ -241,6 +243,16 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 func handleLogo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(logoPNG)
+}
+
+// cssHandler returns an http.HandlerFunc that serves the given bytes as CSS.
+// Used for the embedded, locally-served stylesheets so the dashboard has zero
+// CDN dependencies.
+func cssHandler(body []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Write(body)
+	}
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
