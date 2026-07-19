@@ -8,7 +8,7 @@ From the repository root:
 
 ```bash
 docker build \
-  --build-arg APP_VERSION=v2.1.4 \
+  --build-arg APP_VERSION=v2.2.0 \
   -t foxtrack-bridge .
 ```
 
@@ -41,7 +41,7 @@ Docker can build directly from a GitHub repository:
 
 ```bash
 docker build \
-  --build-arg APP_VERSION=v2.1.4 \
+  --build-arg APP_VERSION=v2.2.0 \
   -t foxtrack-bridge \
   https://github.com/jonathanq/FoxTrack-Bridge.git#add-docker-support
 ```
