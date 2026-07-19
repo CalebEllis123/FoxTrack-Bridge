@@ -18,12 +18,16 @@ func TestAssetsEmbedded(t *testing.T) {
 	if len(iconsCSS) == 0 {
 		t.Error("iconsCSS is empty — web/icons.css not embedded")
 	}
+	if len(fontsCSS) == 0 {
+		t.Error("fontsCSS is empty — web/fonts.css not embedded")
+	}
 }
 
 func TestCSSHandlerServesCSS(t *testing.T) {
 	cases := map[string][]byte{
 		"/tailwind.css": tailwindCSS,
 		"/icons.css":    iconsCSS,
+		"/fonts.css":    fontsCSS,
 	}
 	for path, body := range cases {
 		rec := httptest.NewRecorder()
@@ -56,10 +60,47 @@ func TestNoCDNReferences(t *testing.T) {
 }
 
 func TestUIReferencesLocalAssets(t *testing.T) {
-	for _, want := range []string{`href="/tailwind.css"`, `href="/icons.css"`} {
+	for _, want := range []string{`href="/tailwind.css"`, `href="/icons.css"`, `href="/fonts.css"`} {
 		if !bytes.Contains(uiHTML, []byte(want)) {
 			t.Errorf("ui.html missing local asset link %q", want)
 		}
+	}
+}
+
+func TestFontsEmbedded(t *testing.T) {
+	data, err := fontsFS.ReadFile("web/fonts/inter-latin.woff2")
+	if err != nil {
+		t.Fatalf("embedded font web/fonts/inter-latin.woff2 missing: %v", err)
+	}
+	if !bytes.HasPrefix(data, []byte("wOF2")) {
+		t.Error("inter-latin.woff2 is not a woff2 file (bad magic)")
+	}
+	if len(data) < 1000 {
+		t.Errorf("inter-latin.woff2 suspiciously small: %d bytes", len(data))
+	}
+}
+
+func TestFontHandlerServesWoff2(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/fonts/inter-latin.woff2", nil)
+	fontHandler(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if ct := rec.Header().Get("Content-Type"); ct != "font/woff2" {
+		t.Errorf("Content-Type = %q, want font/woff2", ct)
+	}
+	if rec.Body.Len() == 0 {
+		t.Error("empty body")
+	}
+}
+
+func TestFontHandlerRejectsUnknown(t *testing.T) {
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/fonts/nope.woff2", nil)
+	fontHandler(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want 404", rec.Code)
 	}
 }
 
