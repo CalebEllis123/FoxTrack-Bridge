@@ -3,9 +3,11 @@
 ![GitHub release](https://img.shields.io/github/v/release/FoxesRCool1/FoxTrack-Bridge)
 ![Platforms](https://img.shields.io/badge/platforms-Windows%20%7C%20macOS%20%7C%20Linux-blue)
 
-FoxTrack Bridge is a local 3D printer dashboard and integration server. It runs on any machine on the same network as your printers and gives you a real-time web dashboard for monitoring status, live camera feeds, print history, and basic printer controls. It also connects to [FoxTrack](https://foxtrack.studio/) so you can monitor your printers from anywhere.
+FoxTrack Bridge is a local dashboard and integration server for 3D printers. Run it on any machine on the same network as your printers to get a web dashboard for status, live camera feeds, print history, and basic controls. It can also connect to [FoxTrack](https://foxtrack.studio/) so you can monitor your printers remotely.
 
-### A note on AI
+The dashboard runs fully offline. Its CSS, fonts, and icons are embedded in the binary, so no external network or CDN is needed to load the UI.
+
+## A note on AI
 
 Among many other tools, AI was used to develop this program. If you have a problem with that, you may look for alternative programs made by people with more time or contribute human-made code.
 
@@ -17,82 +19,67 @@ Among many other tools, AI was used to develop this program. If you have a probl
 
 - Live status for Bambu Lab and Klipper/Moonraker printers
 - Print progress, temperatures, elapsed time, and ETA
-- Live camera feed from printers & light toggle
-- AMS filament slot display with slot colors and material types (Bambu Lab only)
-- Print speed selector: Silent / Standard / Sport / Ludicrous (Bambu Lab only)
-- Browser push notifications when prints finish, fail, or are paused
-- Print history locally stored and available via the History view
+- Live camera feed and light toggle
+- AMS filament slot display with colors and material types (Bambu Lab only)
+- Print speed selector: Silent, Standard, Sport, Ludicrous (Bambu Lab only)
+- Browser push notifications when prints finish, fail, or pause
+- Print history stored locally, shown in the History view
 - Automatic updates with staged installation
 - Headless mode for servers, NAS devices, and Raspberry Pi
 
 ---
 
-## Supported Platforms
+## Supported platforms
 
 | Platform |
 |---|
-| Windows x64 | 
+| Windows x64 |
 | macOS Apple Silicon |
 | macOS Intel |
 | Linux x64 |
-| Linux ARM (Headless) |
+| Linux ARM (headless) |
 
-Download the latest builds from the [GitHub releases page](https://github.com/FoxesRCool1/FoxTrack-Bridge/releases/latest).
-
----
-
-## Support the Project
-
-If you are interested in supporting the development of this project, consider signing up to [FoxTrack](https://foxtrack.studio/)!
-
-Join our [Discord](https://discord.com/invite/3hd96AFYBf) to leave feedback.
+Download the latest builds from the [releases page](https://github.com/FoxesRCool1/FoxTrack-Bridge/releases/latest).
 
 ---
 
-## Quick Start
+## Support the project
 
-**1. Run the Bridge**
-
-Download the binary for your platform and launch it. The system tray icon appears on Windows, macOS, and Linux x64. On the Linux ARM build, run the binary from a terminal — the startup output lists the local addresses where the dashboard is available.
-
-**2. Open the dashboard**
-
-Navigate to [http://localhost:8080](http://localhost:8080) in your browser. 
-
-From other devices on the same network, use the IP address shown in the startup output in the log (e.g. `http://192.168.x.xxx:8080`). For this to work you may need to disable WiFi AP Isolation on your router.
-
-**3. Connect to FoxTrack (optional)**
-
-In Settings, paste your FoxTrack API key and click Save. Get your key from [FoxTrack Settings > Integrations](https://foxtrack.studio/settings).
-
-**4. Add a printer**
-
-In Printers, click "Add Printer", select the printer type, fill in the required fields, and click Connect.
+If you want to support development, sign up to [FoxTrack](https://foxtrack.studio/). Join the [Discord](https://discord.com/invite/3hd96AFYBf) to leave feedback.
 
 ---
 
-## Adding Printers
+## Quick start
+
+1. Run the Bridge. Download the binary for your platform and launch it. A system tray icon appears on Windows, macOS, and Linux x64. On the Linux ARM build, run the binary from a terminal; the startup output lists the local addresses where the dashboard is available.
+2. Open the dashboard at [http://localhost:8080](http://localhost:8080). From other devices on the same network, use the IP address shown in the startup output (for example `http://192.168.x.x:8080`). You may need to disable WiFi AP isolation on your router.
+3. Connect to FoxTrack (optional). In Settings, paste your FoxTrack API key and click Save. Get your key from [FoxTrack Settings > Integrations](https://foxtrack.studio/settings).
+4. Add a printer. In Printers, click "Add Printer", select the printer type, fill in the required fields, and click Connect.
+
+---
+
+## Adding printers
 
 ### Bambu Lab
 
 1. On the printer touchscreen, enable **LAN Only Mode** under Network settings.
 2. Enable **Developer Mode** under About.
 3. Note the **IP address**, **Serial Number**, and **LAN Access Code** (shown on the screen after enabling LAN Only Mode).
-4. In the Bridge dashboard under Settings, select **Bambu Lab**, enter those values, and click Connect.
+4. In the dashboard under Settings, select **Bambu Lab**, enter those values, and click Connect.
 
 ### Klipper / Moonraker
 
 1. Find your Moonraker URL, usually `http://192.168.x.x:7125`.
-2. In the Bridge dashboard under Settings, select **Klipper / Moonraker**, enter the URL, and click Connect.
+2. In the dashboard under Settings, select **Klipper / Moonraker**, enter the URL, and click Connect.
 3. If Moonraker has authentication enabled, also provide the Moonraker API key.
 
 ---
 
 ## Raspberry Pi
 
-The Linux ARM build is designed for single-board computers, no display or desktop environment is required.
+The Linux ARM build runs on single-board computers with no display or desktop environment.
 
-**Quick install:**
+Quick install:
 
 ```bash
 chmod +x FoxTrack-Bridge-Linux-ARM
@@ -101,9 +88,9 @@ chmod +x FoxTrack-Bridge-Linux-ARM
 
 The startup output lists the local IP addresses where the dashboard is available from other devices.
 
-**Run as a background service:**
+Run as a background service:
 
-A systemd unit file is included in the repository at `linux/foxtrack-bridge.service`. To install it:
+A systemd unit file is included at `linux/foxtrack-bridge.service`. To install it:
 
 ```bash
 # Copy the binary to /usr/local/bin
@@ -117,27 +104,27 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now foxtrack-bridge
 ```
 
-The service restarts automatically on failure and starts on boot. The dashboard is available at `http://<raspberry-pi-ip>:8080` from any device on the same network.
+The service restarts on failure and starts on boot. The dashboard is available at `http://<raspberry-pi-ip>:8080` from any device on the same network.
 
 ---
 
-## Building from Source
+## Building from source
 
 Requires Go 1.24 or later.
 
-**Standard build (Windows, macOS, Linux x64):**
+Standard build (Windows, macOS, Linux x64):
 
 ```bash
 go build -ldflags="-s -w" -o foxtrack-bridge .
 ```
 
-**Linux ARM (headless, no systray):**
+Linux ARM (headless, no systray):
 
 ```bash
 GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags headless -ldflags="-s -w" -o foxtrack-bridge-arm .
 ```
 
-**Docker:**
+Docker:
 
 ```bash
 docker build --build-arg APP_VERSION=v2.1.4 -t foxtrack-bridge .
@@ -146,14 +133,44 @@ docker run -d --name foxtrack-bridge -p 8080:8080 -v foxtrack-bridge-data:/data 
 
 See [Docker documentation](docs/docker.md) for fork, branch, and server deployment examples.
 
-**Run tests:**
+Run tests:
 
 ```bash
-go test ./...
+go test -tags headless ./...
 ```
+
+The `headless` tag runs the suite without the system tray dependency and includes the embedded-asset tests.
+
+---
+
+## Regenerating dashboard assets
+
+The dashboard loads no external resources. Tailwind CSS, the Inter font, and the icons are committed under `web/` and embedded in the binary. Attribution is in [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md).
+
+Tailwind: after changing classes in `web/ui.html`, regenerate `web/tailwind.css` with the standalone CLI (no Node required):
+
+```bash
+# one-time: download the pinned CLI (git-ignored)
+curl -sL -o web/tailwindcss \
+  https://github.com/tailwindlabs/tailwindcss/releases/download/v3.4.17/tailwindcss-linux-x64
+chmod +x web/tailwindcss
+./web/tailwindcss -c web/tailwind.config.js -i web/tailwind.input.css -o web/tailwind.css --minify
+```
+
+Fonts: `web/fonts/inter-latin.woff2` is a latin subset of Inter (variable, weights 400 to 600), served through `web/fonts.css`. Replace the file to update it.
+
+Icons: `web/icons.css` holds the Font Awesome Free 6.4.0 icons used by `web/ui.html`, encoded as inline SVG masks. To add an icon, add a `.fa-<name>` rule with the glyph's SVG path (see the file header). `go test -tags headless ./...` fails if `web/ui.html` uses an icon that `web/icons.css` does not define.
+
+The generated files are committed. No asset tooling runs during `go build` or the Docker build.
+
+---
+
+## Contributing
+
+Contributions are welcome. If you find a bug, want a feature, or want to improve the docs, open an issue or a pull request. Small fixes and additions are appreciated, including edits to this README.
 
 ---
 
 ## License
 
-MIT - free to use, modify, and redistribute with attribution.
+MIT. Free to use, modify, and redistribute with attribution.
