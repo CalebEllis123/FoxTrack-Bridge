@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -102,6 +103,10 @@ func StartServer() {
 
 	http.HandleFunc("/", handleRoot)
 	http.HandleFunc("/logo.png", handleLogo)
+	http.HandleFunc("/tailwind.css", cssHandler(tailwindCSS))
+	http.HandleFunc("/icons.css", cssHandler(iconsCSS))
+	http.HandleFunc("/fonts.css", cssHandler(fontsCSS))
+	http.HandleFunc("/fonts/", fontHandler)
 	http.HandleFunc("/api/config", handleConfig)
 	http.HandleFunc("/api/printers", handlePrinters)
 	http.HandleFunc("/api/printers/", handlePrinterByName) // DELETE /api/printers/{name}
@@ -241,6 +246,29 @@ func handleRoot(w http.ResponseWriter, r *http.Request) {
 func handleLogo(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "image/png")
 	w.Write(logoPNG)
+}
+
+// cssHandler returns an http.HandlerFunc that serves the given bytes as CSS.
+// Used for the embedded, locally-served stylesheets so the dashboard has zero
+// CDN dependencies.
+func cssHandler(body []byte) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/css; charset=utf-8")
+		w.Write(body)
+	}
+}
+
+// fontHandler serves the embedded Inter woff2 files from web/fonts.
+func fontHandler(w http.ResponseWriter, r *http.Request) {
+	name := path.Base(r.URL.Path) // path.Base strips any traversal segments
+	data, err := fontsFS.ReadFile("web/fonts/" + name)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "font/woff2")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Write(data)
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
