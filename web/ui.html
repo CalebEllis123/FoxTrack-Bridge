@@ -498,7 +498,7 @@ function applyAutoUpdateState(on) {
 async function toggleAutoUpdate() {
     applyAutoUpdateState(!autoUpdateEnabled);
     try {
-        await apiFetch('/api/config', { method:'POST', body:JSON.stringify(buildConfigPayload()) });
+        await apiFetch('/api/config', { method:'POST', body:JSON.stringify(buildSettingsPayload()) });
     } catch (e) { toast('Failed to save: ' + e.message, 'error'); }
 }
 
@@ -559,18 +559,20 @@ async function loadConfig() {
     } catch (_) { setBridgeStatus(false); }
 }
 
-function buildConfigPayload() {
+// Settings saves must never send the printer array: an empty local state
+// (e.g. a failed /api/config load) would otherwise wipe the saved printers.
+// The server treats an absent "printers" key as "leave printers untouched".
+function buildSettingsPayload() {
     return {
         api_key: document.getElementById('apiKey').value.trim(),
         foxtrack2_api_key: document.getElementById('foxtrack2ApiKey').value.trim(),
-        printers: configuredPrinters,
         auto_update: autoUpdateEnabled,
     };
 }
 
 async function saveApiKeys() {
     try {
-        await apiFetch('/api/config', { method:'POST', body:JSON.stringify(buildConfigPayload()) });
+        await apiFetch('/api/config', { method:'POST', body:JSON.stringify(buildSettingsPayload()) });
         // Both typed keys (if any) are now stored server-side; clear the
         // inputs and re-fetch so the placeholders reflect the saved state.
         document.getElementById('apiKey').value = '';

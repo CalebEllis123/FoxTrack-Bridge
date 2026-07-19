@@ -678,6 +678,50 @@ func applyStoredSecrets(newCfg, old *config.Config) {
 	}
 }
 
+// errRefuseClearPrinters is returned when a POST /api/config body would replace a
+// non-empty printer list with an empty one and does not carry
+// "confirm_clear_printers": true. Its message is sent as the 409 response body, so
+// it is written to be understandable by an end user surfacing it in any client.
+// See CLAUDE.md (config-compatibility invariants).
+var errRefuseClearPrinters = errors.New("This save would remove all of your saved printers, so it was blocked to prevent accidental data loss. Your existing printers were kept. To intentionally remove every printer, delete them individually, or resend this request with \"confirm_clear_printers\": true.")
+
+// resolveConfigUpdate applies a POST /api/config request body to the previous
+// config, enforcing the printer-preservation invariants:
+//   - if the body omits the "printers" key entirely, existing printers are kept
+//     untouched (partial update — used by Settings saves);
+//   - if the body carries "printers": [] while printers currently exist, the
+//     update is refused unless it also carries "confirm_clear_printers": true;
+//   - otherwise the printer list is replaced as given.
+// Blank top-level/per-printer secrets are re-filled from old. old is not mutated.
+func resolveConfigUpdate(old *config.Config, body []byte) (*config.Config, error) {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return nil, err
+	}
+	var incoming config.Config
+	if err := json.Unmarshal(body, &incoming); err != nil {
+		return nil, err
+	}
+	var meta struct {
+		ConfirmClearPrinters bool `json:"confirm_clear_printers"`
+	}
+	_ = json.Unmarshal(body, &meta) // best-effort; defaults to false
+
+	_, printersPresent := raw["printers"]
+	newCfg := incoming
+	switch {
+	case !printersPresent:
+		// Partial update: never touch printers. Copy so old is never aliased.
+		if old != nil {
+			newCfg.Printers = append([]config.Printer(nil), old.Printers...)
+		}
+	case len(newCfg.Printers) == 0 && old != nil && len(old.Printers) > 0 && !meta.ConfirmClearPrinters:
+		return nil, errRefuseClearPrinters
+	}
+	applyStoredSecrets(&newCfg, old)
+	return &newCfg, nil
+}
+
 func handleConfig(w http.ResponseWriter, r *http.Request) {
 	jsonHeaders(w)
 	switch r.Method {
@@ -688,18 +732,27 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		defer configMutex.RUnlock()
 		json.NewEncoder(w).Encode(redactConfig(configStore))
 	case "POST":
-		var newCfg config.Config
-		if err := json.NewDecoder(r.Body).Decode(&newCfg); err != nil {
+		body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		configMutex.Lock()
-		applyStoredSecrets(&newCfg, configStore)
 		oldCfg := configStore
-		configStore = &newCfg
+		newCfg, err := resolveConfigUpdate(oldCfg, body)
+		if err != nil {
+			configMutex.Unlock()
+			if errors.Is(err, errRefuseClearPrinters) {
+				http.Error(w, err.Error(), http.StatusConflict)
+			} else {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+			}
+			return
+		}
+		configStore = newCfg
 		configMutex.Unlock()
-		syncPrinterConnections(oldCfg, &newCfg)
-		if err := config.SaveConfig(&newCfg); err != nil {
+		syncPrinterConnections(oldCfg, newCfg)
+		if err := config.SaveConfig(newCfg); err != nil {
 			log.Printf("Warning: failed to save config: %v", err)
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
