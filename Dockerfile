@@ -9,9 +9,10 @@ RUN go mod download
 
 COPY . .
 
-# Keep this in sync with the current release, or pass --build-arg APP_VERSION=...
-# when building release images from a fork or branch.
-ARG APP_VERSION=v2.2.0
+# Defaults to a dev build (update checks disabled — see version.IsValid) so a
+# manual `docker build` without --build-arg never misreports its version.
+# CI always passes --build-arg APP_VERSION=<tag> for real release images.
+ARG APP_VERSION=dev
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -tags headless \
     -trimpath \

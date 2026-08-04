@@ -23,6 +23,21 @@ func Normalized(v string) string {
 	return v
 }
 
+// IsValid reports whether v parses as a numeric x.y.z version. AppVersion
+// defaults to "dev" for source builds, which is not a valid version — this
+// lets callers skip update checks instead of comparing it as 0.0.0.
+func IsValid(v string) bool {
+	if strings.TrimSpace(v) == "" {
+		return false
+	}
+	for _, p := range strings.Split(Normalized(v), ".") {
+		if _, err := strconv.Atoi(p); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
 func Compare(a, b string) int {
 	ap := parseParts(Normalized(a))
 	bp := parseParts(Normalized(b))

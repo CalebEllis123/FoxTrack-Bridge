@@ -954,7 +954,17 @@ func isBambuPrinterConfig(p config.Printer) bool {
 func autoUpdateLoop() {
 	time.Sleep(2 * time.Minute)
 	loggedReadOnly := false
+	loggedDevBuild := false
 	for {
+		if !version.IsValid(version.AppVersion) {
+			if !loggedDevBuild {
+				log.Printf("[auto-update] development build (%s) — update checks disabled", version.AppVersion)
+				loggedDevBuild = true
+			}
+			time.Sleep(1 * time.Hour)
+			continue
+		}
+
 		configMutex.RLock()
 		enabled := configStore != nil && configStore.AutoUpdate
 		configMutex.RUnlock()

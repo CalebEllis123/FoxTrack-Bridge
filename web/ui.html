@@ -317,7 +317,7 @@
                     <div class="flex items-center justify-between">
                         <div>
                             <h2 class="text-xs font-semibold text-zinc-300 uppercase tracking-wide">Auto-Update</h2>
-                            <p class="text-zinc-400 text-xs mt-0.5">Automatically download and restart when a new version is available.</p>
+                            <p id="autoUpdateDesc" class="text-zinc-400 text-xs mt-0.5">Automatically download and restart when a new version is available.</p>
                         </div>
                         <button id="autoUpdateToggle" onclick="toggleAutoUpdate()" class="relative inline-flex h-5 w-9 items-center rounded-full transition-colors bg-zinc-700 shrink-0 ml-3" role="switch" aria-checked="false">
                             <span id="autoUpdateThumb" class="inline-block h-3.5 w-3.5 transform rounded-full bg-zinc-400 transition-transform translate-x-0.5"></span>
@@ -493,6 +493,15 @@ function applyAutoUpdateState(on) {
     const thumb = document.getElementById('autoUpdateThumb');
     if (toggle) { toggle.setAttribute('aria-checked', on); toggle.className = toggle.className.replace(/bg-\S+/, on ? 'bg-white' : 'bg-zinc-700'); }
     if (thumb) { thumb.className = thumb.className.replace(/translate-x-\S+/, on ? 'translate-x-5' : 'translate-x-0.5'); thumb.style.background = on ? '#09090b' : ''; }
+}
+
+function applyDevBuildState(isDev) {
+    const toggle = document.getElementById('autoUpdateToggle');
+    const desc = document.getElementById('autoUpdateDesc');
+    if (toggle) toggle.disabled = isDev;
+    if (desc) desc.textContent = isDev
+        ? 'Disabled — this is a development build; update checks are off.'
+        : 'Automatically download and restart when a new version is available.';
 }
 
 async function toggleAutoUpdate() {
@@ -1371,6 +1380,7 @@ async function checkForUpdate() {
     try { const vi=await apiFetch('/api/version'); setFooterVersion(vi&&vi.version?vi.version:'dev'); } catch(_){ setFooterVersion('dev'); }
     try {
         const info=await apiFetch('/api/update/check');
+        applyDevBuildState(!!(info && info.devBuild));
         if(info&&(info.available||info.pendingRestart)) {
             if (info.pendingRestart || getDismissedUpdate() !== info.latestVersion) showUpdateModal(info);
         }

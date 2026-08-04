@@ -40,6 +40,7 @@ type CheckResult struct {
 	CanAutoInstall bool   `json:"canAutoInstall"`
 	AssetName      string `json:"assetName,omitempty"`
 	Notes          string `json:"notes,omitempty"`
+	DevBuild       bool   `json:"devBuild"`
 }
 
 type releaseAsset struct {
@@ -93,6 +94,14 @@ func CanReplaceExecutable() bool {
 }
 
 func CheckLatest(ctx context.Context) (CheckResult, error) {
+	if !version.IsValid(version.AppVersion) {
+		return CheckResult{
+			CurrentVersion: version.AppVersion,
+			DevBuild:       true,
+			Notes:          "development build — update checks are disabled",
+		}, nil
+	}
+
 	cacheMu.Lock()
 	if time.Since(cachedAt) < 15*time.Minute && !cachedAt.IsZero() {
 		res := cachedResult
@@ -202,6 +211,10 @@ func pickAssetFor(assets []releaseAsset, goos, goarch, buildVariant string) (Ass
 }
 
 func StartInstall(ctx context.Context) error {
+	if !version.IsValid(version.AppVersion) {
+		return fmt.Errorf("development build (%s) — update checks are disabled", version.AppVersion)
+	}
+
 	if !CanReplaceExecutable() {
 		return fmt.Errorf("the binary location is read-only, update by pulling a new image or replacing the binary")
 	}

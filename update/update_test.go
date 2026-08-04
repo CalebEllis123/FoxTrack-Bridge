@@ -1,6 +1,38 @@
 package update
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"foxtrack-bridge/version"
+)
+
+func TestCheckLatestSkipsDevBuild(t *testing.T) {
+	orig := version.AppVersion
+	version.AppVersion = "dev"
+	defer func() { version.AppVersion = orig }()
+
+	res, err := CheckLatest(context.Background())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !res.DevBuild {
+		t.Fatalf("expected DevBuild=true for AppVersion=dev")
+	}
+	if res.Available {
+		t.Fatalf("expected Available=false for a dev build")
+	}
+}
+
+func TestStartInstallRefusesDevBuild(t *testing.T) {
+	orig := version.AppVersion
+	version.AppVersion = "dev"
+	defer func() { version.AppVersion = orig }()
+
+	if err := StartInstall(context.Background()); err == nil {
+		t.Fatal("expected error for dev build")
+	}
+}
 
 func TestParseChecksumText(t *testing.T) {
 	body := "" +

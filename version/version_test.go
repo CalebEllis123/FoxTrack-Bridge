@@ -42,3 +42,25 @@ func TestCompare(t *testing.T) {
 		}
 	}
 }
+
+func TestIsValid(t *testing.T) {
+	tests := []struct {
+		in   string
+		want bool
+	}{
+		{"dev", false},
+		{"", false},
+		{"   ", false},
+		{"v2.2.1", true},
+		{"2.2.1", true},
+		{"2.2.1-beta", true},
+		{"2.2.1+build5", true},
+	}
+
+	for _, tt := range tests {
+		got := IsValid(tt.in)
+		if got != tt.want {
+			t.Fatalf("IsValid(%q) = %v, want %v", tt.in, got, tt.want)
+		}
+	}
+}
