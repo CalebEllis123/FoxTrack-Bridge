@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=FoxTrack Bridge
+Comment=Open the FoxTrack Bridge dashboard (bridge must be running)
+Exec=xdg-open http://localhost:8080
+Icon=foxtrack-bridge
+Terminal=false
+Categories=Network;Utility;
