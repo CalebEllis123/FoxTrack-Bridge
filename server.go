@@ -71,7 +71,7 @@ func sseEscape(s string) string {
 	return strings.NewReplacer("\n", " ", "\r", "").Replace(s)
 }
 
-func StartServer() {
+func StartServer(port int) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -122,8 +122,8 @@ func StartServer() {
 	http.HandleFunc("/api/history", handleHistory)           // GET all history records
 	http.HandleFunc("/api/history/", handleHistoryByPrinter) // GET /api/history/{name}
 
-	printStartupBanner()
-	if err := http.ListenAndServe(":8080", nil); err != nil {
+	printStartupBanner(port)
+	if err := http.ListenAndServe(fmt.Sprintf(":%d", port), nil); err != nil {
 		log.Printf("Server error: %v", err)
 	}
 }
@@ -143,9 +143,9 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-func printStartupBanner() {
+func printStartupBanner(port int) {
 	log.Println("FoxTrack Bridge is running. Open in your browser:")
-	log.Println("  http://localhost:8080")
+	log.Printf("  http://localhost:%d", port)
 	ifaces, err := net.Interfaces()
 	if err == nil {
 		for _, iface := range ifaces {
@@ -164,7 +164,7 @@ func printStartupBanner() {
 				if ip == nil || ip.IsLoopback() || ip.To4() == nil || !isPrivateIP(ip) {
 					continue
 				}
-				log.Printf("  http://%s:8080", ip.String())
+				log.Printf("  http://%s:%d", ip.String(), port)
 			}
 		}
 	}

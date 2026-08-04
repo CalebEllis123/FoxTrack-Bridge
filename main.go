@@ -31,20 +31,23 @@ func onReady() {
 
 	mQuit := systray.AddMenuItem("Quit FoxTrack Bridge", "Stop the bridge and exit")
 
+	port := mustResolvePort()
+	dashboardURL := fmt.Sprintf("http://localhost:%d", port)
+
 	// Start HTTP server + MQTT connections in background
-	go StartServer()
+	go StartServer(port)
 
 	// Open browser after a short delay so the server is ready
 	go func() {
 		time.Sleep(1500 * time.Millisecond)
-		openBrowser("http://localhost:8080")
+		openBrowser(dashboardURL)
 	}()
 
 	go func() {
 		for {
 			select {
 			case <-mOpen.ClickedCh:
-				openBrowser("http://localhost:8080")
+				openBrowser(dashboardURL)
 
 			case <-mStartup.ClickedCh:
 				if startup.IsEnabled() {

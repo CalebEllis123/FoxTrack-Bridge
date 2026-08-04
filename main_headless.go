@@ -7,6 +7,7 @@ import (
 )
 
 func main() {
+	port := mustResolvePort()
 	log.Println("FoxTrack Bridge (headless dev build) starting...")
-	StartServer()
+	StartServer(port)
 }
