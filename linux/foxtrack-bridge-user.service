@@ -1,0 +1,19 @@
+# This ships as foxtrack-bridge-user.service to avoid clashing with the system
+# template unit (foxtrack-bridge@.service) in this directory. Install it under
+# a plain name so the enabled unit itself has no -user suffix:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp linux/foxtrack-bridge-user.service ~/.config/systemd/user/foxtrack-bridge.service
+#   systemctl --user enable --now foxtrack-bridge
+#
+[Unit]
+Description=FoxTrack Bridge — local 3D printer dashboard
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/foxtrack-bridge
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target
