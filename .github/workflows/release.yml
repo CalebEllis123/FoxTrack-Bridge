@@ -64,6 +64,12 @@ jobs:
             goarch: arm64
             asset: FoxTrack-Bridge-Linux-ARM64
 
+          - os: linux-arm32
+            runner: ubuntu-latest
+            goos: linux
+            goarch: arm
+            asset: FoxTrack-Bridge-Linux-ARM32
+
 
     steps:
       - uses: actions/checkout@v4
@@ -164,6 +170,16 @@ jobs:
           CGO_ENABLED: 0
           APP_VERSION: ${{ steps.version.outputs.app_version }}
         run: go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=${APP_VERSION} -X foxtrack-bridge/version.AppBuildVariant=headless" -o FoxTrack-Bridge-Linux-ARM64 .
+
+      - name: Build (Linux ARM32)
+        if: matrix.os == 'linux-arm32'
+        env:
+          GOOS: linux
+          GOARCH: arm
+          GOARM: 7
+          CGO_ENABLED: 0
+          APP_VERSION: ${{ steps.version.outputs.app_version }}
+        run: go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=${APP_VERSION} -X foxtrack-bridge/version.AppBuildVariant=headless" -o FoxTrack-Bridge-Linux-ARM32 .
 
 
       - name: Upload to GitHub Release
