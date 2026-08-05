@@ -597,6 +597,7 @@ func handleTest(w http.ResponseWriter, r *http.Request) {
 // fields (LAN access code, Moonraker API key) blanked and replaced by
 // "is set" flags so the UI can show that a value exists without seeing it.
 type redactedPrinter struct {
+	ID           string `json:"id"`
 	Name         string `json:"name"`
 	IP           string `json:"ip,omitempty"`
 	Serial       string `json:"serial,omitempty"`
@@ -621,6 +622,7 @@ type redactedConfig struct {
 
 func redactPrinter(p config.Printer) redactedPrinter {
 	return redactedPrinter{
+		ID:           p.ID,
 		Name:         p.Name,
 		IP:           p.IP,
 		Serial:       p.Serial,
@@ -628,6 +630,18 @@ func redactPrinter(p config.Printer) redactedPrinter {
 		MoonrakerURL: p.MoonrakerURL,
 		APIKeySet:    p.APIKey != "",
 		WebcamURL:    p.WebcamURL,
+	}
+}
+
+// assignMissingIDs fills in a fresh, server-generated ID for any printer that
+// doesn't already have one. Printers that already carry an ID (backfilled at
+// boot, or echoed back by a client that already knows it) are left untouched —
+// an ID is generated once on creation and never changed.
+func assignMissingIDs(printers []config.Printer) {
+	for i := range printers {
+		if printers[i].ID == "" {
+			printers[i].ID = config.NewPrinterID()
+		}
 	}
 }
 
@@ -717,6 +731,12 @@ func resolveConfigUpdate(old *config.Config, body []byte) (*config.Config, error
 		}
 	case len(newCfg.Printers) == 0 && old != nil && len(old.Printers) > 0 && !meta.ConfirmClearPrinters:
 		return nil, errRefuseClearPrinters
+	default:
+		// Full replace: entries missing an ID (genuinely new printers added
+		// client-side before this save) get one minted now. Entries that
+		// already carry an ID (a rename/edit of an existing printer) keep it
+		// untouched — the client must be able to echo back the ID it has.
+		assignMissingIDs(newCfg.Printers)
 	}
 	applyStoredSecrets(&newCfg, old)
 	return &newCfg, nil
@@ -780,6 +800,10 @@ func handlePrinters(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// Server-generated only — a client-supplied id is never trusted on
+		// create, so "generated once on creation" is an actual guarantee.
+		p.ID = config.NewPrinterID()
+
 		configMutex.Lock()
 		configStore.Printers = append(configStore.Printers, p)
 		cfg := configStore
@@ -794,7 +818,7 @@ func handlePrinters(w http.ResponseWriter, r *http.Request) {
 			lanCtrl.AddOrUpdatePrinter(p, cfg.APIKey, cfg.FoxTrack2APIKey)
 			log.Printf("[%s] connected via Moonraker", p.Name)
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "ok", "printer": redactPrinter(p)})
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}

@@ -3,9 +3,11 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"foxtrack-bridge/config"
@@ -108,5 +110,67 @@ func TestDeleteLastPrinter(t *testing.T) {
 	configMutex.RUnlock()
 	if n != 0 {
 		t.Fatalf("printers = %d, want 0 after deleting the last one", n)
+	}
+}
+
+// POST /api/printers always mints a fresh, server-generated ID and returns
+// the created printer (with that ID) in the response.
+func TestHandlePrinters_POST_AssignsID(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configMutex.Lock()
+	configStore = &config.Config{}
+	configMutex.Unlock()
+
+	body := `{"name":"NewOne","moonraker_url":"http://127.0.0.1:1/"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/printers", strings.NewReader(body))
+	handlePrinters(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body: %s", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		Status  string          `json:"status"`
+		Printer redactedPrinter `json:"printer"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.Printer.ID == "" {
+		t.Fatalf("expected a non-empty id in the response, got: %+v", resp.Printer)
+	}
+
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	if len(configStore.Printers) != 1 || configStore.Printers[0].ID != resp.Printer.ID {
+		t.Fatalf("stored printer ID = %+v, want to match response id %q", configStore.Printers, resp.Printer.ID)
+	}
+}
+
+// Full-replace preserves an already-set ID (e.g. echoed back by a client
+// editing an existing printer) and only mints fresh ones for entries that
+// don't have one yet.
+func TestResolveConfigUpdate_FullReplaceAssignsMissingIDsOnly(t *testing.T) {
+	old := &config.Config{Printers: []config.Printer{
+		{ID: "existing-id", Name: "Monsieur", IP: "192.168.87.22", Serial: "01P00C580801716", LANCode: "81f1aafd"},
+	}}
+	got, err := resolveConfigUpdate(old, []byte(`{"printers":[
+		{"id":"existing-id","name":"Monsieur","ip":"192.168.87.22","serial":"01P00C580801716","lan_code":"81f1aafd"},
+		{"name":"Watson","moonraker_url":"http://127.0.0.1:1/"}
+	]}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Printers) != 2 {
+		t.Fatalf("printers = %d, want 2", len(got.Printers))
+	}
+	if got.Printers[0].ID != "existing-id" {
+		t.Errorf("existing printer's ID = %q, want unchanged %q", got.Printers[0].ID, "existing-id")
+	}
+	if got.Printers[1].ID == "" {
+		t.Errorf("new printer should have been assigned a fresh ID, got empty")
+	}
+	if got.Printers[1].ID == got.Printers[0].ID {
+		t.Errorf("new printer's ID collided with the existing printer's ID")
 	}
 }
