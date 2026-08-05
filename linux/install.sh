@@ -1,13 +1,19 @@
 #!/bin/sh
 # Single-command per-user installer for FoxTrack Bridge on Linux. No sudo,
-# no system-wide writes — everything goes under $HOME. Run from a checkout
-# of this repository (e.g. `./linux/install.sh` after cloning); only the
-# platform binary and checksums.txt are downloaded, the icon, .desktop entry,
-# and systemd unit are read from this checkout.
+# no system-wide writes - everything goes under $HOME. When run from a
+# checkout of this repository (e.g. `./linux/install.sh` after cloning),
+# the icon, .desktop entry, and systemd unit are read from the checkout -
+# useful for testing unreleased changes. Otherwise (e.g. a bare
+# `curl -fsSL <raw-url>/install.sh | sh`), those same three files are
+# downloaded from the matching GitHub release's source tarball instead, so
+# they always match the binary being installed. Only the platform binary
+# and checksums.txt ever come from release assets in either mode.
 set -eu
 
 REPO="FoxesRCool1/FoxTrack-Bridge"
 RELEASE_BASE_URL="https://github.com/${REPO}/releases/latest/download"
+API_LATEST_URL="https://api.github.com/repos/${REPO}/releases/latest"
+ARCHIVE_BASE_URL="https://github.com/${REPO}/archive/refs/tags"
 
 BIN_DIR="$HOME/.local/bin"
 BIN_PATH="$BIN_DIR/foxtrack-bridge"
@@ -91,6 +97,48 @@ detect_asset() {
 	esac
 }
 
+resolve_latest_tag() {
+	release_json="$tmp_dir/release.json"
+	fetch "$API_LATEST_URL" "$release_json"
+	tag=$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$release_json" | head -n 1)
+	if [ -z "$tag" ]; then
+		err "could not determine the latest release tag from the GitHub API"
+		exit 1
+	fi
+	printf '%s\n' "$tag"
+}
+
+fetch_release_assets() {
+	if ! have_cmd tar; then
+		err "tar is required to unpack the release source archive"
+		exit 1
+	fi
+
+	tag=$(resolve_latest_tag)
+	info "No local checkout detected; using packaging assets from release $tag."
+
+	src_tarball="$tmp_dir/source.tar.gz"
+	fetch "$ARCHIVE_BASE_URL/$tag.tar.gz" "$src_tarball"
+
+	src_dir="$tmp_dir/src"
+	mkdir -p "$src_dir"
+	if ! tar -xzf "$src_tarball" -C "$src_dir" --strip-components=1; then
+		err "failed to extract the release $tag source archive"
+		exit 1
+	fi
+
+	ICON_SRC_PATH="$src_dir/assets/logo.png"
+	DESKTOP_SRC_PATH="$src_dir/linux/foxtrack-bridge.desktop"
+	SERVICE_SRC_PATH="$src_dir/linux/foxtrack-bridge-user.service"
+
+	if [ ! -f "$ICON_SRC_PATH" ] || [ ! -f "$DESKTOP_SRC_PATH" ] || [ ! -f "$SERVICE_SRC_PATH" ]; then
+		err "release $tag source archive is missing expected packaging files (assets/logo.png, linux/foxtrack-bridge.desktop, or linux/foxtrack-bridge-user.service) — aborting, nothing installed"
+		exit 1
+	fi
+
+	RESOLVED_TAG="$tag"
+}
+
 do_install() {
 	info "FoxTrack Bridge installer"
 	info "This will install to:"
@@ -100,20 +148,31 @@ do_install() {
 	info "  service: $SERVICE_PATH (as a systemd --user unit, not enabled)"
 	info ""
 
-	if [ ! -f "$SRC_ICON" ] || [ ! -f "$SRC_DESKTOP" ] || [ ! -f "$SRC_SERVICE" ]; then
-		err "this script must be run from a FoxTrack Bridge checkout (missing assets/logo.png, linux/foxtrack-bridge.desktop, or linux/foxtrack-bridge-user.service under $REPO_ROOT)"
-		exit 1
+	tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/foxtrack-install.XXXXXX")
+	trap 'rm -rf "$tmp_dir"' EXIT INT TERM HUP
+
+	RESOLVED_TAG=""
+	if [ -f "$SRC_ICON" ] && [ -f "$SRC_DESKTOP" ] && [ -f "$SRC_SERVICE" ]; then
+		info "Detected local checkout at $REPO_ROOT; using packaging assets from disk (dev/test mode)."
+		ICON_SRC_PATH="$SRC_ICON"
+		DESKTOP_SRC_PATH="$SRC_DESKTOP"
+		SERVICE_SRC_PATH="$SRC_SERVICE"
+	else
+		fetch_release_assets
 	fi
 
 	asset=$(detect_asset)
 	info "Detected architecture $(uname -m) -> release asset $asset"
 
-	tmp_dir=$(mktemp -d "${TMPDIR:-/tmp}/foxtrack-install.XXXXXX")
-	trap 'rm -rf "$tmp_dir"' EXIT INT TERM HUP
+	if [ -n "$RESOLVED_TAG" ]; then
+		asset_base_url="https://github.com/${REPO}/releases/download/${RESOLVED_TAG}"
+	else
+		asset_base_url="$RELEASE_BASE_URL"
+	fi
 
-	info "Downloading $asset and checksums.txt from the latest release..."
-	fetch "$RELEASE_BASE_URL/$asset" "$tmp_dir/$asset"
-	fetch "$RELEASE_BASE_URL/checksums.txt" "$tmp_dir/checksums.txt"
+	info "Downloading $asset and checksums.txt..."
+	fetch "$asset_base_url/$asset" "$tmp_dir/$asset"
+	fetch "$asset_base_url/checksums.txt" "$tmp_dir/checksums.txt"
 
 	info "Verifying checksum..."
 	checksum_line="$tmp_dir/checksum_line.txt"
@@ -142,14 +201,14 @@ do_install() {
 
 	info "Installing icon and desktop entry..."
 	mkdir -p "$ICON_DIR"
-	cp "$SRC_ICON" "$ICON_PATH"
+	cp "$ICON_SRC_PATH" "$ICON_PATH"
 	mkdir -p "$DESKTOP_DIR"
-	cp "$SRC_DESKTOP" "$DESKTOP_PATH"
+	cp "$DESKTOP_SRC_PATH" "$DESKTOP_PATH"
 	refresh_caches
 
 	info "Installing systemd user unit..."
 	mkdir -p "$SERVICE_DIR"
-	cp "$SRC_SERVICE" "$SERVICE_PATH"
+	cp "$SERVICE_SRC_PATH" "$SERVICE_PATH"
 	info "  installed as foxtrack-bridge.service (renamed from foxtrack-bridge-user.service"
 	info "  to avoid clashing with the system template unit foxtrack-bridge@.service)"
 
