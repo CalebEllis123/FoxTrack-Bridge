@@ -661,8 +661,11 @@ func redactConfig(cfg *config.Config) redactedConfig {
 // applyStoredSecrets fills empty secret fields on an incoming config from the
 // currently stored one. The dashboard posts back the redacted config it
 // received, so an empty secret means "keep the existing value" — only a
-// non-empty value replaces a stored secret. Printers are matched by name.
-// The caller must hold configMutex.
+// non-empty value replaces a stored secret. Printers are matched by ID
+// first — the stable identity that survives a rename — falling back to name
+// only for the degenerate case of an incoming printer with no ID at all (a
+// legacy or hand-crafted payload that predates this field). The caller must
+// hold configMutex.
 func applyStoredSecrets(newCfg, old *config.Config) {
 	if old == nil {
 		return
@@ -673,13 +676,23 @@ func applyStoredSecrets(newCfg, old *config.Config) {
 	if newCfg.FoxTrack2APIKey == "" {
 		newCfg.FoxTrack2APIKey = old.FoxTrack2APIKey
 	}
+	oldByID := make(map[string]config.Printer, len(old.Printers))
 	oldByName := make(map[string]config.Printer, len(old.Printers))
 	for _, p := range old.Printers {
+		if p.ID != "" {
+			oldByID[p.ID] = p
+		}
 		oldByName[p.Name] = p
 	}
 	for i := range newCfg.Printers {
 		p := &newCfg.Printers[i]
-		prev, ok := oldByName[p.Name]
+		prev, ok := config.Printer{}, false
+		if p.ID != "" {
+			prev, ok = oldByID[p.ID]
+		}
+		if !ok {
+			prev, ok = oldByName[p.Name]
+		}
 		if !ok {
 			continue
 		}

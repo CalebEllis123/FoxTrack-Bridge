@@ -113,6 +113,35 @@ func TestDeleteLastPrinter(t *testing.T) {
 	}
 }
 
+// The core scenario this whole feature exists for: a printer is renamed (its
+// name changes) but its ID is echoed back unchanged and its lan_code is left
+// blank ("keep what's stored"). The secret must survive the rename — matching
+// by name alone would miss it, since the name in the payload no longer equals
+// the name on disk.
+func TestApplyStoredSecrets_SurvivesRename(t *testing.T) {
+	old := &config.Config{Printers: []config.Printer{
+		{ID: "printer-1", Name: "Monsieur", IP: "192.168.87.22", Serial: "01P00C580801716", LANCode: "81f1aafd"},
+	}}
+	got, err := resolveConfigUpdate(old, []byte(`{"printers":[
+		{"id":"printer-1","name":"Monsieur Renamed","ip":"192.168.87.22","serial":"01P00C580801716"}
+	]}`))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got.Printers) != 1 {
+		t.Fatalf("printers = %d, want 1", len(got.Printers))
+	}
+	if got.Printers[0].Name != "Monsieur Renamed" {
+		t.Fatalf("Name = %q, want the renamed value", got.Printers[0].Name)
+	}
+	if got.Printers[0].LANCode != "81f1aafd" {
+		t.Fatalf("LANCode = %q, want the stored secret to survive the rename", got.Printers[0].LANCode)
+	}
+	if got.Printers[0].ID != "printer-1" {
+		t.Fatalf("ID = %q, want unchanged", got.Printers[0].ID)
+	}
+}
+
 // POST /api/printers always mints a fresh, server-generated ID and returns
 // the created printer (with that ID) in the response.
 func TestHandlePrinters_POST_AssignsID(t *testing.T) {
