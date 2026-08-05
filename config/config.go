@@ -1,8 +1,11 @@
 package config
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log"
 	"os"
 	"path/filepath"
 	"time"
@@ -16,6 +19,7 @@ type Config struct {
 }
 
 type Printer struct {
+	ID           string `json:"id,omitempty"`
 	Name         string `json:"name"`
 	IP           string `json:"ip,omitempty"`
 	Serial       string `json:"serial,omitempty"`
@@ -23,6 +27,24 @@ type Printer struct {
 	MoonrakerURL string `json:"moonraker_url,omitempty"`
 	APIKey       string `json:"api_key,omitempty"`
 	WebcamURL    string `json:"webcam_url,omitempty"`
+	// PreviousNames accumulates every name this printer has been renamed from,
+	// so history lookups can still find prints made under an old name. Always
+	// empty until the edit-printer feature starts appending to it on rename.
+	PreviousNames []string `json:"previous_names,omitempty"`
+}
+
+// NewPrinterID returns a fresh, server-generated printer ID: 16 random bytes,
+// hex-encoded. Assigned once on creation (or backfilled on first load for a
+// pre-existing printer) and never changed afterward.
+func NewPrinterID() string {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		// crypto/rand.Read failing means the OS entropy source is broken —
+		// extremely rare, but fall back to a timestamp-derived ID rather than
+		// leaving the printer with no identity at all.
+		return "fallback-" + hex.EncodeToString([]byte(time.Now().String()))[:32]
+	}
+	return hex.EncodeToString(b)
 }
 
 // legacyConfigPath is the old location used by previous builds.
@@ -63,8 +85,18 @@ func LoadConfig() (*Config, error) {
 		return nil, err
 	}
 
+	backfilled := false
+	for i := range cfg.Printers {
+		if cfg.Printers[i].ID == "" {
+			cfg.Printers[i].ID = NewPrinterID()
+			backfilled = true
+		}
+	}
+
 	// Best-effort migration so future updates keep using the stable user config path.
-	_ = SaveConfig(&cfg)
+	if err := SaveConfig(&cfg); err != nil && backfilled {
+		log.Printf("WARNING: failed to persist backfilled printer IDs (%v) — IDs will be regenerated on next restart until this config can be saved; printer identity will not be stable across restarts", err)
+	}
 
 	return &cfg, nil
 }
