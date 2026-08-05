@@ -29,29 +29,47 @@ Among many other tools, AI was used to develop this program. If you have a probl
 
 ---
 
-## Supported platforms
+## Bridge runs in the background
 
-| Platform |
-|---|
-| Windows x64 |
-| macOS Apple Silicon |
-| macOS Intel |
-| Linux x64 |
-| Linux ARM (headless) |
+FoxTrack Bridge is a persistent background service, not an app you open to check on a print. MQTT connections to Bambu Lab printers, print history recording, browser push notifications, and syncing to FoxTrack all only happen while the Bridge process is running. Anything a printer does while Bridge is stopped is not recorded and is not synced.
 
-Download the latest builds from the [releases page](https://github.com/FoxesRCool1/FoxTrack-Bridge/releases/latest).
+On Windows and macOS, use the system tray's "Enable: Start at Login" option to keep it running continuously. On Linux, see [Running on Linux](#running-on-linux) below for the equivalent systemd setups.
 
 ---
 
-## Support the project
+## Supported platforms
 
-If you want to support development, sign up to [FoxTrack](https://foxtrack.studio/). Join the [Discord](https://discord.com/invite/3hd96AFYBf) to leave feedback.
+| Platform | Asset | Tray or headless |
+|---|---|---|
+| Windows x64 | `FoxTrack-Bridge-Windows.exe` | System tray |
+| macOS Intel | `FoxTrack-Bridge-macOS-Intel.zip` | System tray |
+| macOS Apple Silicon | `FoxTrack-Bridge-macOS-Apple-Silicon.zip` | System tray |
+| Linux x64 | `FoxTrack-Bridge-Linux` | Headless |
+| Linux ARM64 | `FoxTrack-Bridge-Linux-ARM64` | Headless |
+| Linux ARM32 | `FoxTrack-Bridge-Linux-ARM32` | Headless |
+
+Download the latest builds from the [releases page](https://github.com/FoxesRCool1/FoxTrack-Bridge/releases/latest).
+
+Every Linux build is headless: there is no system tray, so control it from the terminal or systemd instead (see [Running on Linux](#running-on-linux)). Linux ARM32 is built for ARMv7 and later; it will not run on ARMv6 boards such as the original Raspberry Pi Zero or Raspberry Pi 1 (see [Raspberry Pi and other ARM boards](#raspberry-pi-and-other-arm-boards)).
+
+---
+
+## Verifying a download
+
+Every release includes a `checksums.txt` with SHA-256 hashes for all six assets above. After downloading a binary, verify it before running it:
+
+```bash
+curl -fsSLO https://github.com/FoxesRCool1/FoxTrack-Bridge/releases/latest/download/checksums.txt
+grep <asset-name> checksums.txt | sha256sum -c -
+```
+
+Replace `<asset-name>` with the file you downloaded, for example `FoxTrack-Bridge-Linux-ARM64`. On macOS, use `shasum -a 256 -c -` instead of `sha256sum -c -`; macOS doesn't ship `sha256sum` by default.
 
 ---
 
 ## Quick start
 
-1. Run the Bridge. Download the binary for your platform and launch it. A system tray icon appears on Windows, macOS, and Linux x64. On the Linux ARM build, run the binary from a terminal; the startup output lists the local addresses where the dashboard is available.
+1. Run the Bridge. Download the binary for your platform (see [Supported platforms](#supported-platforms)) and launch it. On Windows and macOS, a system tray icon appears with an "Open Dashboard" menu. Linux builds are headless: run the binary from a terminal, or see [Running on Linux](#running-on-linux) for a desktop launcher and background-service setup. The startup output lists the local addresses where the dashboard is available.
 2. Open the dashboard at [http://localhost:8080](http://localhost:8080). From other devices on the same network, use the IP address shown in the startup output (for example `http://192.168.x.x:8080`). You may need to disable WiFi AP isolation on your router.
 3. Connect to FoxTrack (optional). In Settings, paste your FoxTrack API key and click Save. Get your key from [FoxTrack Settings > Integrations](https://foxtrack.studio/settings).
 4. Add a printer. In Printers, click "Add Printer", select the printer type, fill in the required fields, and click Connect.
@@ -75,36 +93,155 @@ If you want to support development, sign up to [FoxTrack](https://foxtrack.studi
 
 ---
 
-## Raspberry Pi
+## Configuration and history files
 
-The Linux ARM build runs on single-board computers with no display or desktop environment.
+FoxTrack Bridge stores `config.json` and `history.json` in your OS's standard per-user configuration directory:
 
-Quick install:
+| OS | Location |
+|---|---|
+| Linux | `~/.config/FoxTrack-Bridge/` (or `$XDG_CONFIG_HOME/FoxTrack-Bridge` if set) |
+| macOS | `~/Library/Application Support/FoxTrack-Bridge/` |
+| Windows | `%AppData%\FoxTrack-Bridge\` |
+
+If `config.json` isn't found there, older builds' location, `<the executable's directory>/config/config.json`, is read automatically and migrated to the new location on the next save. This fallback is config-only: `history.json` has no equivalent, so history recorded by a very old install at the legacy location will not appear after upgrading.
+
+If either file fails to load, for example because it's corrupted, Bridge backs the broken file up next to itself as `config.json.corrupt-<timestamp>` or `history.json.corrupt-<timestamp>` and starts fresh rather than deleting or overwriting it.
+
+---
+
+## Changing the listen port
+
+Bridge listens on port 8080 by default. Change it with the `--port` flag or the `FOXTRACK_BRIDGE_PORT` environment variable; if both are set, `--port` wins:
 
 ```bash
-chmod +x FoxTrack-Bridge-Linux-ARM
-./FoxTrack-Bridge-Linux-ARM
+./foxtrack-bridge --port 9000
+# or
+FOXTRACK_BRIDGE_PORT=9000 ./foxtrack-bridge
 ```
 
-The startup output lists the local IP addresses where the dashboard is available from other devices.
+This matters on Klipper setups in particular: 8080 is also the default webcam port for mjpg-streamer on Mainsail and Fluidd, so running Bridge on the same machine can collide with it unless you move one of them off 8080.
 
-Run as a background service:
+---
 
-A systemd unit file is included at `linux/foxtrack-bridge.service`. To install it:
+## Running on Linux
+
+### Manual install (recommended)
+
+Download the asset matching your CPU architecture (see [Supported platforms](#supported-platforms)), verify it (see [Verifying a download](#verifying-a-download)), then place it somewhere your own user account owns, so auto-update can work later (see [Auto-update and install location](#auto-update-and-install-location)):
 
 ```bash
-# Copy the binary to /usr/local/bin
-sudo cp FoxTrack-Bridge-Linux-ARM /usr/local/bin/foxtrack-bridge
+mkdir -p ~/.local/bin
+mv FoxTrack-Bridge-Linux-ARM64 ~/.local/bin/foxtrack-bridge
+chmod +x ~/.local/bin/foxtrack-bridge
+```
 
-# Copy the service file
-sudo cp linux/foxtrack-bridge.service /etc/systemd/system/
+Make sure `~/.local/bin` is on your `PATH`, then run it:
 
-# Enable and start the service
+```bash
+foxtrack-bridge
+```
+
+The startup output lists the local addresses where the dashboard is available. To keep it running in the background, see [Systemd user service](#systemd-user-service-recommended-for-desktop-linux) below.
+
+### Scripted install (linux/install.sh)
+
+The repository includes `linux/install.sh`, a per-user installer that installs the binary, an icon, a desktop launcher, and a systemd user unit under `$HOME`, with no sudo required. It must be run from a checkout of this repository: it reads its icon, desktop entry, and unit file from the repository itself, and only downloads the release binary and `checksums.txt` from GitHub.
+
+```bash
+git clone https://github.com/FoxesRCool1/FoxTrack-Bridge.git
+cd FoxTrack-Bridge
+./linux/install.sh
+```
+
+This installs the service but does not enable it; it prints the `systemctl --user enable --now` and `loginctl enable-linger` commands to run afterward (also covered below). It also installs a desktop launcher entry named "FoxTrack Bridge" that opens the dashboard in your browser; the launcher assumes the default port 8080. See [Uninstalling](#uninstalling) for `linux/install.sh --uninstall`.
+
+### Systemd user service (recommended for desktop Linux)
+
+Fetch the unit file from the repository and enable it as a user service:
+
+```bash
+mkdir -p ~/.config/systemd/user
+curl -fsSL -o ~/.config/systemd/user/foxtrack-bridge.service \
+  https://raw.githubusercontent.com/FoxesRCool1/FoxTrack-Bridge/main/linux/foxtrack-bridge-user.service
+systemctl --user enable --now foxtrack-bridge
+```
+
+A user service normally only runs while you're logged in. To have it run at boot without a login session, enable linger for your account:
+
+```bash
+loginctl enable-linger "$(whoami)"
+```
+
+This is the same unit `linux/install.sh` installs to the same path.
+
+### Systemd system service (servers and appliances)
+
+For a machine dedicated to running Bridge under a specific system account, use the system-wide template unit instead:
+
+```bash
+sudo cp FoxTrack-Bridge-Linux-ARM64 /usr/local/bin/foxtrack-bridge
+sudo cp linux/foxtrack-bridge@.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now foxtrack-bridge
+sudo systemctl enable --now foxtrack-bridge@<username>
 ```
 
-The service restarts on failure and starts on boot. The dashboard is available at `http://<raspberry-pi-ip>:8080` from any device on the same network.
+Replace `<username>` with the account that should run the process; it doesn't need to be the account you're logged in as. Replace the asset name with the one matching your hardware from [Supported platforms](#supported-platforms). A binary copied in with `sudo cp` is owned by root, which affects auto-update; see below.
+
+### Auto-update and install location
+
+Whether Bridge can update itself depends on whether the account running it can write to the directory holding the running binary, not on who owns the machine. When it can't, Bridge doesn't fail silently: it logs an `[auto-update] unavailable in this environment` message explaining that the binary location is read-only, and the dashboard's update prompt shows a manual download link instead of an "Update now" button.
+
+This is why `~/.local/bin` is recommended: a binary placed there by your own account, as in [Manual install](#manual-install-recommended) and the [systemd user service](#systemd-user-service-recommended-for-desktop-linux) above, stays writable by that account. A binary copied in with `sudo cp` into `/usr/local/bin`, as in the system service above, is owned by root; if the system service then runs it as a normal, non-root user, that user can't write to `/usr/local/bin`, so auto-update is unavailable there. The same applies inside Docker, where the binary's directory is never writable; update by pulling a new image instead.
+
+### Firewall access
+
+If Bridge and your browser are on different machines, the listen port (8080 by default, see [Changing the listen port](#changing-the-listen-port)) needs to be reachable across your LAN:
+
+```bash
+# ufw (Debian, Ubuntu)
+sudo ufw allow 8080/tcp
+
+# firewalld (Fedora, RHEL, openSUSE)
+sudo firewall-cmd --permanent --add-port=8080/tcp
+sudo firewall-cmd --reload
+```
+
+Some Wi-Fi routers also block device-to-device traffic by default (AP or client isolation); if the dashboard is unreachable from another device on the same network even with the firewall open, check that setting on your router.
+
+### Raspberry Pi and other ARM boards
+
+Linux ARM64 covers 64-bit Raspberry Pi OS on a Pi 3 or later, including the Pi Zero 2 W. Linux ARM32 covers 32-bit Raspberry Pi OS and targets ARMv7; it will not run on ARMv6 boards such as the original Raspberry Pi Zero or Raspberry Pi 1 (`linux/install.sh` detects an ARMv6 host and refuses to install rather than fetching a build that can't run).
+
+### Uninstalling
+
+If you installed with `linux/install.sh`:
+
+```bash
+./linux/install.sh --uninstall
+```
+
+This stops and disables the user service, then removes the binary, icon, desktop entry, and systemd user unit it installed. It does not touch `~/.config/FoxTrack-Bridge`, so your printers, settings, and print history are kept (see [Configuration and history files](#configuration-and-history-files)).
+
+For a manual install with the user service, remove the same pieces yourself:
+
+```bash
+systemctl --user disable --now foxtrack-bridge
+rm -f ~/.local/bin/foxtrack-bridge
+rm -f ~/.config/systemd/user/foxtrack-bridge.service
+rm -f ~/.local/share/applications/foxtrack-bridge.desktop
+rm -f ~/.local/share/icons/hicolor/512x512/apps/foxtrack-bridge.png
+```
+
+For a system service install:
+
+```bash
+sudo systemctl disable --now foxtrack-bridge@<username>
+sudo rm -f /usr/local/bin/foxtrack-bridge
+sudo rm -f /etc/systemd/system/foxtrack-bridge@.service
+sudo systemctl daemon-reload
+```
+
+Either way, your configuration and print history stay in place (see [Configuration and history files](#configuration-and-history-files)) unless you remove that directory yourself.
 
 ---
 
@@ -112,16 +249,32 @@ The service restarts on failure and starts on boot. The dashboard is available a
 
 Requires Go 1.24 or later.
 
-Standard build (Windows, macOS, Linux x64):
+Always pass `-X foxtrack-bridge/version.AppVersion=<version>` in `-ldflags`. Without it, `AppVersion` stays `dev`, which the dashboard footer shows as `vdev`, and update checks are disabled by design: `dev` isn't a version number GitHub releases can be compared against.
+
+Windows and macOS (with system tray):
 
 ```bash
-go build -ldflags="-s -w" -o foxtrack-bridge .
+go build -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=<version>" -o foxtrack-bridge .
 ```
 
-Linux ARM (headless, no systray):
+These builds need CGO enabled (the Go default) and a C toolchain: Xcode Command Line Tools on macOS, a MinGW-w64/gcc toolchain on Windows.
+
+Linux, headless (recommended, no system tray, no GTK dependencies):
 
 ```bash
-GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags headless -ldflags="-s -w" -o foxtrack-bridge-arm .
+CGO_ENABLED=0 go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=<version>" -o foxtrack-bridge .
+```
+
+Linux, with system tray (requires `gcc` and the `gtk3` and `libayatana-appindicator3` development headers, for example `sudo apt-get install gcc libgtk-3-dev libayatana-appindicator3-dev` on Debian or Ubuntu):
+
+```bash
+CGO_ENABLED=1 go build -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=<version>" -o foxtrack-bridge .
+```
+
+Cross-compiling for another architecture, for example a 64-bit Raspberry Pi (use `GOARCH=arm GOARM=7` instead of `GOARCH=arm64` for the ARM32/ARMv7 build):
+
+```bash
+GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -tags headless -ldflags="-s -w -X foxtrack-bridge/version.AppVersion=<version>" -o foxtrack-bridge-arm64 .
 ```
 
 Docker:
