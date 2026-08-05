@@ -1,0 +1,6 @@
+go.mod
+go.sum
+.github/
+dist/
+.env
+.env.*
