@@ -347,15 +347,15 @@
 let configuredPrinters = [];
 let liveStatus = {};
 let prevLiveStatus = {};
-const printStartTimes = {};   // name → unix seconds when printing began (JS-side tracking)
+const printStartTimes = {};   // id → unix seconds when printing began (JS-side tracking)
 let updateInfo = null;
 let currentView = 'printers';
 let removeMode = false;
-let selectedForRemoval = new Set();
+let selectedForRemoval = new Set(); // ids
 let advancedMode = false;
 let autoUpdateEnabled = false;
-const pendingLightTarget = {}; // name -> expected light_on boolean; cleared when poll confirms state
-const pendingFanTarget = {}; // name -> expected cooling_fan_pct (0–100); cleared when poll confirms
+const pendingLightTarget = {}; // id -> expected light_on boolean; cleared when poll confirms state
+const pendingFanTarget = {}; // id -> expected cooling_fan_pct (0–100); cleared when poll confirms
 const cameraLoading = new Set(); // enc values whose camera stream is still loading
 
 const brands = {
@@ -393,14 +393,17 @@ function sendNotification(title, body) {
 }
 
 function detectStatusTransitions() {
-    for (const name of Object.keys(liveStatus)) {
-        const cur = liveStatus[name];
-        const prev = prevLiveStatus[name];
+    const idToName = {};
+    for (const p of configuredPrinters) idToName[p.id] = p.name;
+    for (const id of Object.keys(liveStatus)) {
+        const cur = liveStatus[id];
+        const prev = prevLiveStatus[id];
         if (!cur) continue;
+        const name = idToName[id] || 'Printer';
         const isPrinting = cur.status === 'printing';
         const wasPrinting = prev && prev.status === 'printing';
         if (isPrinting && !wasPrinting) {
-            printStartTimes[name] = Date.now() / 1000;
+            printStartTimes[id] = Date.now() / 1000;
         }
         if (!isPrinting) {
             if (wasPrinting) {
@@ -412,7 +415,7 @@ function detectStatusTransitions() {
                 else if (cur.status === 'paused')
                     sendNotification(name + ' — Print Paused', fname || '');
             }
-            delete printStartTimes[name];
+            delete printStartTimes[id];
         }
     }
 }
@@ -512,19 +515,19 @@ async function toggleAutoUpdate() {
 }
 
 async function toggleLightEncoded(enc) {
-    const name = decodePrinterName(enc);
-    if (name in pendingLightTarget) return;
+    const id = decodePrinterId(enc);
+    if (id in pendingLightTarget) return;
     // Store what we expect the state to become so the spinner stays until confirmed
-    const expected = !(liveStatus[name]?.light_on ?? false);
-    pendingLightTarget[name] = expected;
+    const expected = !(liveStatus[id]?.light_on ?? false);
+    pendingLightTarget[id] = expected;
     const btn = document.querySelector('#pcard-' + enc + ' .light-btn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-circle-notch fa-spin mr-1"></i>Light'; }
     try {
-        await apiFetch('/api/control/' + enc + '/toggle_light', { method:'POST', body:'{}' });
+        await apiFetch('/api/control/' + encodeURIComponent(printerNameForId(id)) + '/toggle_light', { method:'POST', body:'{}' });
         pollStatus();
     } catch (e) {
         toast('Light failed: ' + e.message, 'error');
-        delete pendingLightTarget[name];
+        delete pendingLightTarget[id];
         renderPrinters();
     }
 }
@@ -738,13 +741,13 @@ function exitRemoveMode() {
 }
 
 function togglePrinterSelectionEncoded(enc) {
-    const name = decodePrinterName(enc);
-    if (selectedForRemoval.has(name)) selectedForRemoval.delete(name);
-    else selectedForRemoval.add(name);
+    const id = decodePrinterId(enc);
+    if (selectedForRemoval.has(id)) selectedForRemoval.delete(id);
+    else selectedForRemoval.add(id);
     updateRemoveCount();
     const card = document.getElementById('pcard-' + enc);
     if (card) {
-        const sel = selectedForRemoval.has(name);
+        const sel = selectedForRemoval.has(id);
         if (sel) card.classList.add('pcard-sel'); else card.classList.remove('pcard-sel');
         const cb = card.querySelector('.sel-check');
         if (cb) cb.checked = sel;
@@ -758,11 +761,11 @@ function updateRemoveCount() {
 }
 
 async function confirmBulkRemove() {
-    const names = Array.from(selectedForRemoval);
-    if (!names.length || !confirm('Remove ' + names.length + ' printer' + (names.length!==1?'s':'') + '?')) return;
+    const ids = Array.from(selectedForRemoval);
+    if (!ids.length || !confirm('Remove ' + ids.length + ' printer' + (ids.length!==1?'s':'') + '?')) return;
     try {
-        for (const n of names) await apiFetch('/api/printers/' + encodeURIComponent(n), { method:'DELETE' });
-        toast(names.length + ' printer' + (names.length!==1?'s':'') + ' removed', 'info');
+        for (const id of ids) await apiFetch('/api/printers/' + encodeURIComponent(id), { method:'DELETE' });
+        toast(ids.length + ' printer' + (ids.length!==1?'s':'') + ' removed', 'info');
         exitRemoveMode();
         await loadConfig();
         await pollStatus();
@@ -771,33 +774,41 @@ async function confirmBulkRemove() {
 
 // ── Printer rendering ─────────────────────────────────────────────────────────
 
-function decodePrinterName(enc) { try { return decodeURIComponent(enc||''); } catch(_){ return enc||''; } }
-function sendControlEncoded(enc,cmd,payload) { sendControl(decodePrinterName(enc),cmd,payload); }
-function confirmStopEncoded(enc) { confirmStop(decodePrinterName(enc)); }
-function startPrintEncoded(enc) { startPrint(decodePrinterName(enc)); }
+function decodePrinterId(enc) { try { return decodeURIComponent(enc||''); } catch(_){ return enc||''; } }
 
-async function sendControl(name, command, payload) {
+// Control and camera endpoints are still name-based server-side (mqtt.go/lan.go stay
+// name-keyed internally), so any URL built for those must resolve id -> current name.
+function printerNameForId(id) {
+    const p = configuredPrinters.find(p => p.id === id);
+    return p ? p.name : '';
+}
+
+function sendControlEncoded(enc,cmd,payload) { sendControl(decodePrinterId(enc),cmd,payload); }
+function confirmStopEncoded(enc) { confirmStop(decodePrinterId(enc)); }
+function startPrintEncoded(enc) { startPrint(decodePrinterId(enc)); }
+
+async function sendControl(id, command, payload) {
     try {
-        await apiFetch('/api/control/' + encodeURIComponent(name) + '/' + encodeURIComponent(command), { method:'POST', body:JSON.stringify(payload||{}) });
+        await apiFetch('/api/control/' + encodeURIComponent(printerNameForId(id)) + '/' + encodeURIComponent(command), { method:'POST', body:JSON.stringify(payload||{}) });
         toast(command + ' sent');
         setTimeout(pollStatus, 800);
     } catch (e) { toast('Failed: ' + e.message, 'error'); }
 }
 
-let _pendingStopName = null;
-function confirmStop(name) {
-    _pendingStopName = name;
+let _pendingStopId = null;
+function confirmStop(id) {
+    _pendingStopId = id;
     document.getElementById('stopConfirmModal').classList.remove('hidden');
 }
 function closeStopConfirm() {
-    _pendingStopName = null;
+    _pendingStopId = null;
     document.getElementById('stopConfirmModal').classList.add('hidden');
 }
 function executeStop() {
-    if (_pendingStopName) sendControl(_pendingStopName, 'stop');
+    if (_pendingStopId) sendControl(_pendingStopId, 'stop');
     closeStopConfirm();
 }
-function startPrint(name) { const f=prompt('Enter file URL or path:'); if(f) sendControl(name,'start',{file_name:f}); }
+function startPrint(id) { const f=prompt('Enter file URL or path:'); if(f) sendControl(id,'start',{file_name:f}); }
 
 
 function renderPrinters() {
@@ -807,17 +818,17 @@ function renderPrinters() {
     updateStatCards();
 
     // Clear light pending entries whose state has been confirmed by the latest poll
-    for (const name of Object.keys(pendingLightTarget)) {
-        const actual = liveStatus[name]?.light_on ?? false;
-        if (actual === pendingLightTarget[name]) delete pendingLightTarget[name];
+    for (const id of Object.keys(pendingLightTarget)) {
+        const actual = liveStatus[id]?.light_on ?? false;
+        if (actual === pendingLightTarget[id]) delete pendingLightTarget[id];
     }
 
     // Clear fan pending entries whose state has been confirmed by the latest poll
-    for (const name of Object.keys(pendingFanTarget)) {
-        const expected = pendingFanTarget[name];
-        const actual = liveStatus[name]?.cooling_fan_pct ?? 0;
+    for (const id of Object.keys(pendingFanTarget)) {
+        const expected = pendingFanTarget[id];
+        const actual = liveStatus[id]?.cooling_fan_pct ?? 0;
         const confirmed = expected === 0 ? actual === 0 : Math.abs(actual - expected) <= 12;
-        if (confirmed) delete pendingFanTarget[name];
+        if (confirmed) delete pendingFanTarget[id];
     }
 
     // Snapshot which panels are open before replacing innerHTML
@@ -845,7 +856,8 @@ function renderPrinters() {
         if (!panel) return;
         panel.classList.remove('hidden');
         const img = panel.querySelector('img');
-        if (img && !img.src.endsWith('/api/camera/' + enc)) {
+        const camName = printerNameForId(decodePrinterId(enc));
+        if (img && !img.src.endsWith('/api/camera/' + encodeURIComponent(camName))) {
             if (cameraLoading.has(enc)) {
                 img.onload = img.onerror = () => {
                     cameraLoading.delete(enc);
@@ -853,7 +865,7 @@ function renderPrinters() {
                     if (b) b.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
                 };
             }
-            img.src = '/api/camera/' + enc;
+            img.src = '/api/camera/' + encodeURIComponent(camName);
         }
     });
     // Restore open gcode panels
@@ -874,7 +886,7 @@ function renderPrinters() {
 }
 
 function printerCard(printer) {
-    const live = liveStatus[printer.name] || null;
+    const live = liveStatus[printer.id] || null;
     const status = live && live.status ? live.status : 'connecting';
     const meta = statusMeta(status);
     const file = live && live.file_name ? live.file_name : '';
@@ -888,11 +900,11 @@ function printerCard(printer) {
     const lightOn = !!(live && live.light_on);
     const coolingFanPct = live && live.cooling_fan_pct > 0 ? live.cooling_fan_pct : null;
     const filamentUsedMM = live && live.filament_used_mm > 0 ? live.filament_used_mm : null;
-    const enc = encodeURIComponent(printer.name);
+    const enc = encodeURIComponent(printer.id);
     const isBambu = !!(printer.serial && (printer.lan_code || printer.lan_code_set) && !printer.moonraker_url);
     const typeLabel = isBambu ? 'Bambu' : 'Klipper';
 
-    const sel = removeMode && selectedForRemoval.has(printer.name);
+    const sel = removeMode && selectedForRemoval.has(printer.id);
     const clickAttr = removeMode ? ' onclick="togglePrinterSelectionEncoded(\'' + enc + '\')" style="cursor:pointer"' : '';
     const cardClass = 'bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden' + (sel ? ' pcard-sel' : '');
     const checkbox = removeMode
@@ -913,7 +925,7 @@ function printerCard(printer) {
         : '';
 
     const dis = (status==='disconnected'||status==='connecting') ? 'disabled ' : '';
-    const lightPending = printer.name in pendingLightTarget;
+    const lightPending = printer.id in pendingLightTarget;
     const lightCls = 'light-btn btn-outline' + (lightOn ? ' border-yellow-700/60 text-yellow-400' : '');
     const lightHtml = lightPending
         ? '<i class="fas fa-circle-notch fa-spin mr-1"></i>Light'
@@ -953,8 +965,8 @@ function printerCard(printer) {
         : '';
 
     // Fan speed panel — collapsible, works for both Bambu and Klipper
-    const fanPending = printer.name in pendingFanTarget;
-    const fanTargetPct = pendingFanTarget[printer.name];
+    const fanPending = printer.id in pendingFanTarget;
+    const fanTargetPct = pendingFanTarget[printer.id];
     const fanPanel = !removeMode ?
         '<div id="fan-' + enc + '" class="hidden border-t border-zinc-800 px-4 py-3">'
         + '<div class="flex items-center gap-1.5">'
@@ -1026,7 +1038,7 @@ function printerCard(printer) {
         + '<div class="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2"><p class="text-[10px] text-zinc-400 font-medium uppercase tracking-wide">ETA</p>'
         + ((status==='printing'||status==='paused')
             ? '<p class="text-xs text-zinc-300 mt-0.5">' + escHtml(formatRemaining(tr)) + '</p>'
-              + (printStartTimes[printer.name] ? '<p class="text-[10px] text-zinc-400 mt-0.5">' + formatElapsed(printStartTimes[printer.name]) + '</p>' : '')
+              + (printStartTimes[printer.id] ? '<p class="text-[10px] text-zinc-400 mt-0.5">' + formatElapsed(printStartTimes[printer.id]) + '</p>' : '')
             : '<p class="text-xs text-zinc-400 mt-0.5">—</p>')
         + '</div>'
         + '</div>'
@@ -1070,6 +1082,7 @@ function toggleCamera(enc) {
         const btn = document.querySelector('#pcard-' + enc + ' .cam-btn');
         if (btn) btn.innerHTML = '<i class="fas fa-circle-notch fa-spin mr-1"></i>Camera';
         if (img) {
+            const id = decodePrinterId(enc);
             img.onload = () => {
                 cameraLoading.delete(enc);
                 const b = document.querySelector('#pcard-' + enc + ' .cam-btn');
@@ -1081,7 +1094,7 @@ function toggleCamera(enc) {
                 if (b) b.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
                 panel.innerHTML = '<div class="p-4 text-center text-xs text-zinc-400"><i class="fas fa-video-slash mr-1"></i>Camera unavailable — check webcam service or URL</div>';
             };
-            img.src = '/api/camera/' + enc;
+            img.src = '/api/camera/' + encodeURIComponent(printerNameForId(id));
         }
     } else {
         cameraLoading.delete(enc);
@@ -1105,23 +1118,23 @@ function toggleFan(enc) {
 }
 
 async function setFanSpeedEncoded(enc, pct) {
-    const name = decodePrinterName(enc);
-    if (name in pendingFanTarget) return; // prevent double-tap while pending
-    pendingFanTarget[name] = pct;
+    const id = decodePrinterId(enc);
+    if (id in pendingFanTarget) return; // prevent double-tap while pending
+    pendingFanTarget[id] = pct;
     renderPrinters();
     // Safety: clear pending after 10s in case MQTT never confirms
     const safetyTimer = setTimeout(() => {
-        if (pendingFanTarget[name] === pct) {
-            delete pendingFanTarget[name];
+        if (pendingFanTarget[id] === pct) {
+            delete pendingFanTarget[id];
             renderPrinters();
         }
     }, 10000);
     try {
-        await apiFetch('/api/control/' + enc + '/fan_speed', { method: 'POST', body: JSON.stringify({ pct }) });
+        await apiFetch('/api/control/' + encodeURIComponent(printerNameForId(id)) + '/fan_speed', { method: 'POST', body: JSON.stringify({ pct }) });
         setTimeout(pollStatus, 1500);
     } catch (e) {
         clearTimeout(safetyTimer);
-        delete pendingFanTarget[name];
+        delete pendingFanTarget[id];
         toast('Fan failed: ' + e.message, 'error');
         renderPrinters();
         pollStatus();
@@ -1145,8 +1158,9 @@ async function sendGcodeEncoded(enc) {
     if (!inp) return;
     const line = inp.value.trim();
     if (!line) return;
+    const id = decodePrinterId(enc);
     try {
-        await apiFetch('/api/control/' + enc + '/gcode', { method:'POST', body:JSON.stringify({ line }) });
+        await apiFetch('/api/control/' + encodeURIComponent(printerNameForId(id)) + '/gcode', { method:'POST', body:JSON.stringify({ line }) });
         toast('GCode sent: ' + line, 'info');
         inp.value = '';
     } catch (e) { toast('GCode failed: ' + e.message, 'error'); }
@@ -1257,6 +1271,13 @@ async function refreshGlobalHistory() {
         });
         Object.keys(byPrinter).forEach(n => byPrinter[n].sort((a,b) => (b.start_time||0)-(a.start_time||0)));
 
+        // History stays keyed by printer name (out of scope for the id migration); to
+        // read this printer's live status (id-keyed) we need name -> id for currently
+        // configured printers. Deleted/renamed printers simply have no live entry,
+        // matching today's behavior.
+        const nameToId = {};
+        for (const p of configuredPrinters) nameToId[p.name] = p.id;
+
         const cards = Object.keys(byPrinter).map(name => {
             const enc = encodeURIComponent(name);
             const recs = byPrinter[name];
@@ -1265,7 +1286,7 @@ async function refreshGlobalHistory() {
             const pSecs = recs.reduce((s, r) => s + (r.duration || 0), 0);
             const pRate = recs.length ? Math.round(pFinished / recs.length * 100) + '%' : '—';
             // Hours: use Moonraker's own lifetime total when available (Klipper), otherwise Bridge-tracked
-            const live = liveStatus[name];
+            const live = liveStatus[nameToId[name]];
             const printerTotalHours = live && live.total_print_hours > 0 ? live.total_print_hours : null;
             const pHours = printerTotalHours !== null
                 ? printerTotalHours.toFixed(1) + 'h'

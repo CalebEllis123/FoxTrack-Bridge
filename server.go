@@ -271,13 +271,39 @@ func fontHandler(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+// handleStatus reports live status keyed by printer ID. mqttpkg.GetPrintersState
+// and lanCtrl.GetStates are both internally name-keyed (out of scope to change),
+// so the merged result is translated through configStore.Printers before encoding.
 func handleStatus(w http.ResponseWriter, r *http.Request) {
 	jsonHeaders(w)
 	merged := mqttpkg.GetPrintersState()
 	for k, v := range lanCtrl.GetStates() {
 		merged[k] = v
 	}
-	json.NewEncoder(w).Encode(merged)
+
+	configMutex.RLock()
+	nameToID := make(map[string]string, len(configStore.Printers))
+	for _, p := range configStore.Printers {
+		if p.ID != "" {
+			nameToID[p.Name] = p.ID
+		}
+	}
+	configMutex.RUnlock()
+
+	byID := make(map[string]*mqttpkg.TelemetryData, len(merged))
+	var dropped []string
+	for name, v := range merged {
+		id, ok := nameToID[name]
+		if !ok {
+			dropped = append(dropped, name)
+			continue
+		}
+		byID[id] = v
+	}
+	if len(dropped) > 0 {
+		log.Printf("[status] dropped live status for %d printer(s) with no matching config entry: %v", len(dropped), dropped)
+	}
+	json.NewEncoder(w).Encode(byID)
 }
 
 func handleVersion(w http.ResponseWriter, r *http.Request) {
