@@ -7,7 +7,7 @@
 #   systemctl --user enable --now foxtrack-bridge
 #
 [Unit]
-Description=FoxTrack Bridge — local 3D printer dashboard
+Description=FoxTrack Bridge - local 3D printer dashboard
 
 [Service]
 Type=simple
