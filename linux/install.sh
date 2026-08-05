@@ -87,11 +87,11 @@ detect_asset() {
 		echo "FoxTrack-Bridge-Linux-ARM32"
 		;;
 	armv6l)
-		err "ARMv6 is not supported — the ARM32 release build targets ARMv7 and later"
+		err "ARMv6 is not supported - the ARM32 release build targets ARMv7 and later"
 		exit 1
 		;;
 	*)
-		err "unrecognized architecture '$arch' — no FoxTrack Bridge build is available for it"
+		err "unrecognized architecture '$arch' - no FoxTrack Bridge build is available for it"
 		exit 1
 		;;
 	esac
@@ -132,7 +132,8 @@ fetch_release_assets() {
 	SERVICE_SRC_PATH="$src_dir/linux/foxtrack-bridge-user.service"
 
 	if [ ! -f "$ICON_SRC_PATH" ] || [ ! -f "$DESKTOP_SRC_PATH" ] || [ ! -f "$SERVICE_SRC_PATH" ]; then
-		err "release $tag source archive is missing expected packaging files (assets/logo.png, linux/foxtrack-bridge.desktop, or linux/foxtrack-bridge-user.service) — aborting, nothing installed"
+		err "release $tag source archive is missing expected packaging files (assets/logo.png, linux/foxtrack-bridge.desktop, or linux/foxtrack-bridge-user.service) - aborting, nothing installed"
+		err "this release predates the installer; install manually per the README: https://github.com/${REPO}#manual-install-recommended"
 		exit 1
 	fi
 
@@ -177,11 +178,11 @@ do_install() {
 	info "Verifying checksum..."
 	checksum_line="$tmp_dir/checksum_line.txt"
 	if ! awk -v f="$asset" '$2 == f { print; found=1 } END { exit !found }' "$tmp_dir/checksums.txt" >"$checksum_line"; then
-		err "no checksum entry for $asset in checksums.txt — aborting, nothing installed"
+		err "no checksum entry for $asset in checksums.txt - aborting, nothing installed"
 		exit 1
 	fi
 	if ! (cd "$tmp_dir" && sha256sum -c checksum_line.txt); then
-		err "checksum verification failed for $asset — aborting, nothing installed"
+		err "checksum verification failed for $asset - aborting, nothing installed"
 		exit 1
 	fi
 
