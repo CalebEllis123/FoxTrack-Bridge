@@ -357,6 +357,8 @@ let autoUpdateEnabled = false;
 const pendingLightTarget = {}; // id -> expected light_on boolean; cleared when poll confirms state
 const pendingFanTarget = {}; // id -> expected cooling_fan_pct (0–100); cleared when poll confirms
 const cameraLoading = new Set(); // enc values whose camera stream is still loading
+const printerCardEls = new Map(); // id -> { el, hooks } — keyed patch rendering state
+let forceFullCardRefresh = false; // set true to force a full content rebuild of every card on the next renderPrinters() pass
 
 const brands = {
     bambu: {
@@ -487,6 +489,9 @@ function toggleAdvancedMode() {
     const thumb = document.getElementById('advancedThumb');
     if (toggle) { toggle.style.background = advancedMode ? '#ffffff' : ''; toggle.style.backgroundColor = advancedMode ? '#ffffff' : ''; toggle.setAttribute('aria-checked', advancedMode); toggle.className = toggle.className.replace(/bg-\S+/, advancedMode ? 'bg-white' : 'bg-zinc-700'); }
     if (thumb) { thumb.className = thumb.className.replace(/translate-x-\S+/, advancedMode ? 'translate-x-5' : 'translate-x-0.5'); thumb.style.background = advancedMode ? '#09090b' : ''; }
+    // Advanced mode adds/removes the GCode button on Bambu cards — a structural
+    // change patchCard's field-level updates can't produce, so force a full rebuild.
+    forceFullCardRefresh = true;
     renderPrinters();
 }
 
@@ -520,7 +525,8 @@ async function toggleLightEncoded(enc) {
     // Store what we expect the state to become so the spinner stays until confirmed
     const expected = !(liveStatus[id]?.light_on ?? false);
     pendingLightTarget[id] = expected;
-    const btn = document.querySelector('#pcard-' + enc + ' .light-btn');
+    const entry = printerCardEls.get(id);
+    const btn = entry && entry.hooks.lightBtn;
     if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-circle-notch fa-spin mr-1"></i>Light'; }
     try {
         await apiFetch('/api/control/' + encodeURIComponent(printerNameForId(id)) + '/toggle_light', { method:'POST', body:'{}' });
@@ -729,6 +735,9 @@ function enterRemoveMode() {
     document.getElementById('normalModeButtons').classList.add('hidden');
     document.getElementById('removeModeButtons').classList.remove('hidden');
     updateRemoveCount();
+    // removeMode swaps the whole controls/camera row for a selection checkbox —
+    // structural, not a field update, so force a full rebuild of every card.
+    forceFullCardRefresh = true;
     renderPrinters();
 }
 
@@ -737,6 +746,7 @@ function exitRemoveMode() {
     selectedForRemoval.clear();
     document.getElementById('normalModeButtons').classList.remove('hidden');
     document.getElementById('removeModeButtons').classList.add('hidden');
+    forceFullCardRefresh = true;
     renderPrinters();
 }
 
@@ -831,62 +841,257 @@ function renderPrinters() {
         if (confirmed) delete pendingFanTarget[id];
     }
 
-    // Snapshot which panels are open before replacing innerHTML
-    const openCams = new Set();
-    const openGcode = new Set();
-    const openSpeed = new Set();
-    const openFan = new Set();
-    list.querySelectorAll('[id^="cam-"]').forEach(el => { if (!el.classList.contains('hidden')) openCams.add(el.id.slice(4)); });
-    list.querySelectorAll('[id^="gcode-"]').forEach(el => { if (!el.classList.contains('hidden')) openGcode.add(el.id.slice(6)); });
-    list.querySelectorAll('[id^="speed-"]').forEach(el => { if (!el.classList.contains('hidden')) openSpeed.add(el.id.slice(6)); });
-    list.querySelectorAll('[id^="fan-"]').forEach(el => { if (!el.classList.contains('hidden')) openFan.add(el.id.slice(4)); });
-
     if (configuredPrinters.length === 0) {
+        printerCardEls.clear();
         list.innerHTML = '<div class="col-span-2 rounded-xl border border-zinc-800 bg-zinc-950 p-8 text-center">'
             + '<p class="text-zinc-400 text-sm">No printers connected.</p>'
             + '<button onclick="openAddPrinterModal()" class="mt-3 btn-primary inline-block">Add Printer</button>'
             + '</div>';
         return;
     }
-    list.innerHTML = configuredPrinters.map(printerCard).join('');
 
-    // Restore open camera panels
-    openCams.forEach(enc => {
-        const panel = document.getElementById('cam-' + enc);
-        if (!panel) return;
-        panel.classList.remove('hidden');
-        const img = panel.querySelector('img');
-        const camName = printerNameForId(decodePrinterId(enc));
-        if (img && !img.src.endsWith('/api/camera/' + encodeURIComponent(camName))) {
-            if (cameraLoading.has(enc)) {
-                img.onload = img.onerror = () => {
-                    cameraLoading.delete(enc);
-                    const b = document.querySelector('#pcard-' + enc + ' .cam-btn');
-                    if (b) b.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
-                };
-            }
-            img.src = '/api/camera/' + encodeURIComponent(camName);
+    // Drop cards for printers no longer configured.
+    const currentIds = new Set(configuredPrinters.map(p => p.id));
+    for (const [id, entry] of printerCardEls) {
+        if (!currentIds.has(id)) { entry.el.remove(); printerCardEls.delete(id); }
+    }
+    // Clear a leftover empty-state placeholder (or any stale markup) before the
+    // create/patch loop below — it isn't tracked in printerCardEls.
+    if (!printerCardEls.size) list.innerHTML = '';
+
+    const doFullRefresh = forceFullCardRefresh;
+    forceFullCardRefresh = false;
+
+    // Keyed reorder: walk configuredPrinters in order, creating/patching/refreshing
+    // each card, and move it into place with insertBefore only when it isn't
+    // already there. Works for brand-new nodes (no parent yet) and existing ones.
+    let ref = list.firstElementChild;
+    for (const printer of configuredPrinters) {
+        let entry = printerCardEls.get(printer.id);
+        if (!entry) {
+            entry = createPrinterCard(printer);
+            printerCardEls.set(printer.id, entry);
+        } else if (doFullRefresh) {
+            refreshCardContent(entry, printer);
+        } else {
+            patchCard(entry, printer);
         }
-    });
-    // Restore open gcode panels
-    openGcode.forEach(enc => {
-        const panel = document.getElementById('gcode-' + enc);
-        if (panel) panel.classList.remove('hidden');
-    });
-    // Restore open speed panels
-    openSpeed.forEach(enc => {
-        const panel = document.getElementById('speed-' + enc);
-        if (panel) panel.classList.remove('hidden');
-    });
-    // Restore open fan panels
-    openFan.forEach(enc => {
-        const panel = document.getElementById('fan-' + enc);
-        if (panel) panel.classList.remove('hidden');
-    });
+        if (entry.el !== ref) list.insertBefore(entry.el, ref);
+        else ref = ref.nextElementSibling;
+    }
 }
 
-function printerCard(printer) {
+function cardOuterClass(printer) {
+    const sel = removeMode && selectedForRemoval.has(printer.id);
+    return 'bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden' + (sel ? ' pcard-sel' : '');
+}
+
+// Full structural (re)build of a card's content — used on create and whenever
+// removeMode/advancedMode toggles change the card's shape, never on a plain poll.
+function applyCardShell(el, printer) {
+    const enc = encodeURIComponent(printer.id);
+    el.className = cardOuterClass(printer);
+    if (removeMode) { el.style.cursor = 'pointer'; el.onclick = () => togglePrinterSelectionEncoded(enc); }
+    else { el.style.cursor = ''; el.onclick = null; }
+    el.innerHTML = cardInnerHTML(printer, liveStatus[printer.id] || null);
+}
+
+// One-time DOM lookup per card, run right after (re)building its innerHTML.
+// patchCard reads these cached references on every ordinary poll instead of
+// re-querying — the whole point of this rewrite is to stop doing that per tick.
+function collectHooks(el) {
+    return {
+        printerName: el.querySelector('.printer-name'),
+        printerModel: el.querySelector('.printer-model'),
+        typeBadge: el.querySelector('.type-badge'),
+        statusBadge: el.querySelector('.status-badge'),
+        statusDot: el.querySelector('.status-dot'),
+        statusLabel: el.querySelector('.status-label'),
+        fileName: el.querySelector('.file-name'),
+        progressWrap: el.querySelector('.progress-wrap'),
+        progressFill: el.querySelector('.progress-fill'),
+        nozzleLabel: el.querySelector('.nozzle-label'),
+        nozzleValue: el.querySelector('.nozzle-value'),
+        bedValue: el.querySelector('.bed-value'),
+        etaText: el.querySelector('.eta-text'),
+        etaElapsed: el.querySelector('.eta-elapsed'),
+        etaDash: el.querySelector('.eta-dash'),
+        errorText: el.querySelector('.error-text'),
+        filamentWrap: el.querySelector('.filament-wrap'),
+        filamentValue: el.querySelector('.filament-value'),
+        pauseBtn: el.querySelector('.pause-btn'),
+        resumeBtn: el.querySelector('.resume-btn'),
+        stopBtn: el.querySelector('.stop-btn'),
+        startBtn: el.querySelector('.start-btn'), // Klipper only — null on Bambu cards
+        lightBtn: el.querySelector('.light-btn'),
+        camBtn: el.querySelector('.cam-btn'),
+        camPanel: el.querySelector('.cam-panel'),
+        camImg: el.querySelector('.cam-img'),
+        camUnavailable: el.querySelector('.cam-unavailable'),
+        fanPanel: el.querySelector('.fan-panel'),
+        fanButtons: Array.from(el.querySelectorAll('.fan-btn')),
+        speedPanel: el.querySelector('.speed-panel'), // Bambu only — null on Klipper cards
+        speedButtons: Array.from(el.querySelectorAll('.speed-btn')), // Bambu only — empty on Klipper cards
+        amsContainer: el.querySelector('.ams-container'), // Bambu only — null on Klipper cards
+        gcodePanel: el.querySelector('.gcode-panel'), // Bambu + advancedMode only
+        gcodeInput: el.querySelector('.gcode-input'),
+    };
+}
+
+function createPrinterCard(printer) {
+    const el = document.createElement('article');
+    el.id = 'pcard-' + encodeURIComponent(printer.id);
+    applyCardShell(el, printer);
+    return { el, hooks: collectHooks(el) };
+}
+
+function refreshCardContent(entry, printer) {
+    applyCardShell(entry.el, printer);
+    entry.hooks = collectHooks(entry.el); // old hooks are detached once innerHTML is reassigned
+}
+
+// Field-level update only — no innerHTML writes to subtrees holding live state
+// (camera <img>, collapsible panels' own open/closed hidden class).
+function patchCard(entry, printer) {
+    const hooks = entry.hooks;
     const live = liveStatus[printer.id] || null;
+    const status = live && live.status ? live.status : 'connecting';
+    const meta = statusMeta(status);
+    const isBambu = !!(printer.serial && (printer.lan_code || printer.lan_code_set) && !printer.moonraker_url);
+    const dis = (status === 'disconnected' || status === 'connecting');
+
+    if (hooks.printerName) hooks.printerName.textContent = printer.name;
+    if (hooks.typeBadge) hooks.typeBadge.textContent = isBambu ? 'Bambu' : 'Klipper';
+    if (hooks.printerModel) {
+        const modelText = isBambu && live && live.printer_model ? live.printer_model : '';
+        hooks.printerModel.textContent = modelText;
+        hooks.printerModel.classList.toggle('hidden', !modelText);
+    }
+
+    if (hooks.statusDot) hooks.statusDot.className = 'status-dot w-1.5 h-1.5 rounded-full ' + meta.dot;
+    if (hooks.statusLabel) hooks.statusLabel.textContent = meta.label;
+    if (hooks.statusBadge) hooks.statusBadge.className = 'status-badge inline-flex items-center gap-1 border rounded-md px-1.5 py-0.5 text-[10px] ' + meta.badge + ' ' + meta.text;
+
+    const file = live && live.file_name ? live.file_name : '';
+    if (hooks.fileName) {
+        hooks.fileName.textContent = file;
+        hooks.fileName.title = file;
+        hooks.fileName.classList.toggle('hidden', !file);
+    }
+
+    const progress = live && typeof live.progress === 'number' ? live.progress : 0;
+    const showProgress = status === 'printing' || status === 'paused';
+    if (hooks.progressWrap) hooks.progressWrap.classList.toggle('hidden', !showProgress);
+    if (hooks.progressFill) hooks.progressFill.style.width = progress + '%';
+
+    const nozzle = live && typeof live.nozzle_temp === 'number' ? live.nozzle_temp : null;
+    const nozzleTgt = live && typeof live.nozzle_target === 'number' ? live.nozzle_target : null;
+    const bed = live && typeof live.bed_temp === 'number' ? live.bed_temp : null;
+    const bedTgt = live && typeof live.bed_target === 'number' ? live.bed_target : null;
+    if (hooks.nozzleLabel) hooks.nozzleLabel.textContent = (live && live.active_extruder) ? 'Active Toolhead' : 'Nozzle';
+    applyTempValue(hooks.nozzleValue, 'nozzle-value', nozzle, nozzleTgt);
+    applyTempValue(hooks.bedValue, 'bed-value', bed, bedTgt);
+
+    const tr = live && typeof live.time_remaining === 'number' ? live.time_remaining : 0;
+    if (hooks.etaText) { hooks.etaText.textContent = formatRemaining(tr); hooks.etaText.classList.toggle('hidden', !showProgress); }
+    const elapsedShown = showProgress && !!printStartTimes[printer.id];
+    if (hooks.etaElapsed) {
+        hooks.etaElapsed.classList.toggle('hidden', !elapsedShown);
+        if (elapsedShown) hooks.etaElapsed.textContent = formatElapsed(printStartTimes[printer.id]);
+    }
+    if (hooks.etaDash) hooks.etaDash.classList.toggle('hidden', showProgress);
+
+    const error = live && live.error ? live.error : '';
+    if (hooks.errorText) {
+        hooks.errorText.textContent = error ? ('Error: ' + error) : '';
+        hooks.errorText.classList.toggle('hidden', !error);
+    }
+
+    const filamentUsedMM = live && live.filament_used_mm > 0 ? live.filament_used_mm : null;
+    const showFilament = status === 'printing' && filamentUsedMM !== null;
+    if (hooks.filamentWrap) hooks.filamentWrap.classList.toggle('hidden', !showFilament);
+    if (hooks.filamentValue && showFilament) {
+        hooks.filamentValue.textContent = filamentUsedMM >= 1000 ? (filamentUsedMM / 1000).toFixed(1) + 'm' : Math.round(filamentUsedMM) + 'mm';
+    }
+
+    [hooks.pauseBtn, hooks.resumeBtn, hooks.stopBtn, hooks.startBtn].forEach(b => { if (b) b.disabled = dis; });
+
+    const lightOn = !!(live && live.light_on);
+    const lightPending = printer.id in pendingLightTarget;
+    if (hooks.lightBtn) {
+        hooks.lightBtn.disabled = dis || lightPending;
+        hooks.lightBtn.className = 'light-btn btn-outline' + (lightOn ? ' border-yellow-700/60 text-yellow-400' : '');
+        hooks.lightBtn.innerHTML = lightPending
+            ? '<i class="fas fa-circle-notch fa-spin mr-1"></i>Light'
+            : '<i class="fas fa-lightbulb mr-1"></i>' + (lightOn ? 'On' : 'Off');
+    }
+
+    const coolingFanPct = live && live.cooling_fan_pct > 0 ? live.cooling_fan_pct : null;
+    const fanPending = printer.id in pendingFanTarget;
+    const fanTargetPct = pendingFanTarget[printer.id];
+    const fanLevels = [0, 25, 50, 75, 100];
+    if (hooks.fanButtons.length) {
+        hooks.fanButtons.forEach((btn, i) => {
+            const pct = fanLevels[i];
+            const isTarget = fanPending && fanTargetPct === pct;
+            const active = !fanPending && (pct === 0
+                ? coolingFanPct === null || coolingFanPct === 0
+                : coolingFanPct !== null && Math.abs(coolingFanPct - pct) <= 12);
+            btn.className = 'fan-btn ' + ((active || isTarget) ? 'btn-primary' : 'btn-outline');
+            btn.disabled = dis || (fanPending && !isTarget);
+            btn.style.opacity = (fanPending && !isTarget) ? '0.4' : '';
+            const icon = isTarget ? '<i class="fas fa-circle-notch fa-spin mr-1"></i>' : '';
+            btn.innerHTML = icon + (pct === 0 ? 'Off' : pct + '%');
+        });
+    }
+
+    const speedLevel = live && live.speed_level ? live.speed_level : 0;
+    if (hooks.speedButtons.length) {
+        hooks.speedButtons.forEach((btn, i) => {
+            const lvl = i + 1;
+            btn.className = 'speed-btn ' + (speedLevel === lvl ? 'btn-primary' : 'btn-outline');
+            btn.disabled = dis;
+        });
+    }
+
+    if (hooks.amsContainer) {
+        const amsSlots = live && live.ams ? live.ams : [];
+        hooks.amsContainer.classList.toggle('hidden', amsSlots.length === 0);
+        hooks.amsContainer.innerHTML = amsSlotsInnerHTML(amsSlots);
+    }
+}
+
+function applyTempValue(el, cls, now, tgt) {
+    if (!el) return;
+    el.className = cls + ' text-xs mt-0.5 ' + (now === null ? 'text-zinc-400' : 'text-zinc-200');
+    el.innerHTML = now === null ? '--' : (Math.round(now) + '° <span class="text-zinc-400">/ ' + (tgt !== null ? Math.round(tgt) : '--') + '°</span>');
+}
+
+function tempValueP(cls, now, tgt) {
+    return now === null
+        ? '<p class="' + cls + ' text-xs text-zinc-400 mt-0.5">--</p>'
+        : '<p class="' + cls + ' text-xs text-zinc-200 mt-0.5">' + Math.round(now) + '° <span class="text-zinc-400">/ ' + (tgt !== null ? Math.round(tgt) : '--') + '°</span></p>';
+}
+
+function amsSlotsInnerHTML(amsSlots) {
+    return '<span class="text-[10px] text-zinc-400 uppercase tracking-wide font-medium self-center">AMS</span>'
+        + '<div class="flex items-center gap-2">'
+        + amsSlots.map(s => {
+            const color = s.color ? '#' + s.color : '#3f3f46';
+            const label = s.material || ('S' + (s.slot + 1));
+            const ring = s.active ? ' ring-2 ring-white/60 ring-offset-1 ring-offset-zinc-950' : '';
+            return '<div class="flex flex-col items-center gap-1" title="Slot ' + (s.slot + 1) + (s.active ? ' — loaded' : '') + (label ? ' · ' + escHtml(label) : '') + '">'
+                + '<div class="w-6 h-6 rounded-full' + ring + '" style="background:' + escHtml(color) + '"></div>'
+                + '<span class="text-[9px] text-zinc-400 font-mono">' + escHtml(label.slice(0, 5)) + '</span>'
+                + '</div>';
+        }).join('')
+        + '</div>';
+}
+
+// Pure string builder for a card's full inner content — the single source of
+// truth for structure. Used on create and on a forced full refresh; never
+// called from patchCard.
+function cardInnerHTML(printer, live) {
     const status = live && live.status ? live.status : 'connecting';
     const meta = statusMeta(status);
     const file = live && live.file_name ? live.file_name : '';
@@ -905,23 +1110,9 @@ function printerCard(printer) {
     const typeLabel = isBambu ? 'Bambu' : 'Klipper';
 
     const sel = removeMode && selectedForRemoval.has(printer.id);
-    const clickAttr = removeMode ? ' onclick="togglePrinterSelectionEncoded(\'' + enc + '\')" style="cursor:pointer"' : '';
-    const cardClass = 'bg-zinc-950 border border-zinc-800 rounded-xl overflow-hidden' + (sel ? ' pcard-sel' : '');
     const checkbox = removeMode
         ? '<input type="checkbox" class="sel-check w-4 h-4 rounded cursor-pointer" ' + (sel?'checked ':'')
           + 'onclick="event.stopPropagation();togglePrinterSelectionEncoded(\'' + enc + '\')">'
-        : '';
-
-    const tempCell = (label, now, tgt) =>
-        '<div class="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2">'
-        + '<p class="text-[10px] text-zinc-400 font-medium uppercase tracking-wide">' + label + '</p>'
-        + (now === null
-            ? '<p class="text-xs text-zinc-400 mt-0.5">--</p>'
-            : '<p class="text-xs text-zinc-200 mt-0.5">' + Math.round(now) + '° <span class="text-zinc-400">/ ' + (tgt!==null?Math.round(tgt):'--') + '°</span></p>')
-        + '</div>';
-
-    const progressBar = (status==='printing'||status==='paused')
-        ? '<div class="w-full bg-zinc-800 rounded-full h-px mt-3"><div class="h-px rounded-full bg-zinc-300 transition-all duration-500" style="width:' + progress + '%"></div></div>'
         : '';
 
     const dis = (status==='disconnected'||status==='connecting') ? 'disabled ' : '';
@@ -933,33 +1124,24 @@ function printerCard(printer) {
     const speedLevel = live && live.speed_level ? live.speed_level : 0;
     const amsSlots = live && live.ams ? live.ams : [];
 
-    // AMS panel: read-only filament slot display on the right of the button row
-    const amsPanel = (isBambu && amsSlots.length > 0) ?
-        '<div class="flex items-end gap-2 shrink-0">'
-        + '<span class="text-[10px] text-zinc-400 uppercase tracking-wide font-medium self-center">AMS</span>'
-        + '<div class="flex items-center gap-2">'
-        + amsSlots.map(s => {
-            const color = s.color ? '#' + s.color : '#3f3f46';
-            const label = s.material || ('S' + (s.slot + 1));
-            const ring = s.active ? ' ring-2 ring-white/60 ring-offset-1 ring-offset-zinc-950' : '';
-            return '<div class="flex flex-col items-center gap-1" title="Slot ' + (s.slot + 1) + (s.active ? ' — loaded' : '') + (label ? ' · ' + escHtml(label) : '') + '">'
-                + '<div class="w-6 h-6 rounded-full' + ring + '" style="background:' + escHtml(color) + '"></div>'
-                + '<span class="text-[9px] text-zinc-400 font-mono">' + escHtml(label.slice(0, 5)) + '</span>'
-                + '</div>';
-        }).join('')
-        + '</div></div>'
+    // AMS container always exists for Bambu cards (visibility toggled by slot
+    // count) so its hook is stable; Klipper cards never render it at all.
+    const amsPanel = isBambu ?
+        '<div class="ams-container flex items-end gap-2 shrink-0' + (amsSlots.length > 0 ? '' : ' hidden') + '">'
+        + amsSlotsInnerHTML(amsSlots)
+        + '</div>'
         : '';
 
     // Speed panel (BambuLab only) — collapsible, toggled by the Speed button
     const speedNames = ['', 'Silent', 'Standard', 'Sport', 'Ludicrous'];
     const speedPanel = isBambu ?
-        '<div id="speed-' + enc + '" class="hidden border-t border-zinc-800 px-4 py-3">'
+        '<div id="speed-' + enc + '" class="speed-panel hidden border-t border-zinc-800 px-4 py-3">'
         + '<div class="flex items-center gap-1.5">'
         + '<span class="text-[10px] text-zinc-400 uppercase tracking-wide font-medium mr-0.5">Speed</span>'
         + [1,2,3,4].map(lvl => {
             const active = speedLevel === lvl;
             const cls = active ? 'btn-primary' : 'btn-outline';
-            return '<button ' + dis + 'onclick="sendControlEncoded(\'' + enc + '\',\'print_speed\',{level:\'' + lvl + '\'})" class="' + cls + '" style="padding:0.2rem 0.5rem;font-size:0.65rem">' + speedNames[lvl] + '</button>';
+            return '<button ' + dis + 'onclick="sendControlEncoded(\'' + enc + '\',\'print_speed\',{level:\'' + lvl + '\'})" class="speed-btn ' + cls + '" style="padding:0.2rem 0.5rem;font-size:0.65rem">' + speedNames[lvl] + '</button>';
         }).join('')
         + '</div></div>'
         : '';
@@ -968,7 +1150,7 @@ function printerCard(printer) {
     const fanPending = printer.id in pendingFanTarget;
     const fanTargetPct = pendingFanTarget[printer.id];
     const fanPanel = !removeMode ?
-        '<div id="fan-' + enc + '" class="hidden border-t border-zinc-800 px-4 py-3">'
+        '<div id="fan-' + enc + '" class="fan-panel hidden border-t border-zinc-800 px-4 py-3">'
         + '<div class="flex items-center gap-1.5">'
         + '<span class="text-[10px] text-zinc-400 uppercase tracking-wide font-medium mr-0.5">Part Fan</span>'
         + [0, 25, 50, 75, 100].map(pct => {
@@ -979,9 +1161,9 @@ function printerCard(printer) {
                 : coolingFanPct !== null && Math.abs(coolingFanPct - pct) <= 12);
             const cls = (active || isTarget) ? 'btn-primary' : 'btn-outline';
             const btnDis = (dis || (fanPending && !isTarget)) ? 'disabled ' : '';
-            const opacity = fanPending && !isTarget ? ' style="padding:0.2rem 0.5rem;font-size:0.65rem;opacity:0.4"' : ' style="padding:0.2rem 0.5rem;font-size:0.65rem"';
+            const opacity = fanPending && !isTarget ? '0.4' : '';
             const icon = isTarget ? '<i class="fas fa-circle-notch fa-spin mr-1"></i>' : '';
-            return '<button ' + btnDis + 'onclick="setFanSpeedEncoded(\'' + enc + '\',' + pct + ')" class="' + cls + '"' + opacity + '>' + icon + label + '</button>';
+            return '<button ' + btnDis + 'onclick="setFanSpeedEncoded(\'' + enc + '\',' + pct + ')" class="fan-btn ' + cls + '" style="padding:0.2rem 0.5rem;font-size:0.65rem;opacity:' + opacity + '">' + icon + label + '</button>';
         }).join('')
         + '</div></div>'
         : '';
@@ -989,72 +1171,76 @@ function printerCard(printer) {
     const controls = removeMode ? '' :
         '<div class="flex items-end justify-between gap-3 mt-3">'
         + '<div class="flex flex-wrap gap-1.5">'
-        + '<button ' + dis + 'onclick="sendControlEncoded(\'' + enc + '\',\'pause\')" class="btn-outline">Pause</button>'
-        + '<button ' + dis + 'onclick="sendControlEncoded(\'' + enc + '\',\'resume\')" class="btn-outline">Resume</button>'
-        + '<button ' + dis + 'onclick="confirmStopEncoded(\'' + enc + '\')" class="btn-danger">Stop</button>'
+        + '<button ' + dis + 'onclick="sendControlEncoded(\'' + enc + '\',\'pause\')" class="pause-btn btn-outline">Pause</button>'
+        + '<button ' + dis + 'onclick="sendControlEncoded(\'' + enc + '\',\'resume\')" class="resume-btn btn-outline">Resume</button>'
+        + '<button ' + dis + 'onclick="confirmStopEncoded(\'' + enc + '\')" class="stop-btn btn-danger">Stop</button>'
         + '<button ' + (lightPending?'disabled ':'') + dis + 'onclick="toggleLightEncoded(\'' + enc + '\')" class="' + lightCls + '">' + lightHtml + '</button>'
         + '<button onclick="toggleCamera(\'' + enc + '\')" class="btn-outline cam-btn">' + (cameraLoading.has(enc) ? '<i class="fas fa-circle-notch fa-spin mr-1"></i>' : '<i class="fas fa-camera mr-1"></i>') + 'Camera</button>'
         + '<button onclick="toggleFan(\'' + enc + '\')" class="btn-outline"><i class="fas fa-fan mr-1"></i>Fan</button>'
         + (isBambu
             ? '<button onclick="toggleSpeed(\'' + enc + '\')" class="btn-outline"><i class="fas fa-gauge-high mr-1"></i>Speed</button>'
               + (advancedMode ? '<button onclick="toggleGcode(\'' + enc + '\')" class="btn-outline"><i class="fas fa-terminal mr-1"></i>GCode</button>' : '')
-            : '<button ' + dis + 'onclick="startPrintEncoded(\'' + enc + '\')" class="btn-outline">Start Print</button>')
+            : '<button ' + dis + 'onclick="startPrintEncoded(\'' + enc + '\')" class="start-btn btn-outline">Start Print</button>')
         + '</div>'
         + amsPanel
         + '</div>';
 
     const camPanel = removeMode ? '' :
-        '<div id="cam-' + enc + '" class="hidden border-t border-zinc-800 bg-black">'
-        + '<img src="" alt="Camera" style="display:block;width:100%;max-height:300px;object-fit:contain;">'
+        '<div id="cam-' + enc + '" class="cam-panel hidden border-t border-zinc-800 bg-black">'
+        + '<img class="cam-img" src="" alt="Camera" style="display:block;width:100%;max-height:300px;object-fit:contain;">'
+        + '<div class="cam-unavailable hidden p-4 text-center text-xs text-zinc-400"><i class="fas fa-video-slash mr-1"></i>Camera unavailable — check webcam service or URL</div>'
         + '</div>';
 
     const gcodePanel = (isBambu && !removeMode) ?
-        '<div id="gcode-' + enc + '" class="hidden border-t border-zinc-800 px-4 py-3 flex gap-2">'
+        '<div id="gcode-' + enc + '" class="gcode-panel hidden border-t border-zinc-800 px-4 py-3 flex gap-2">'
         + '<input id="gcodeInput-' + enc + '" type="text" placeholder="e.g. M106 P1 S128" autocomplete="off"'
-        + '  class="flex-1 bg-zinc-950 border border-zinc-800 text-zinc-100 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-white/20 font-mono"'
+        + '  class="gcode-input flex-1 bg-zinc-950 border border-zinc-800 text-zinc-100 rounded-xl px-3 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-white/20 font-mono"'
         + '  onkeydown="if(event.key===\'Enter\')sendGcodeEncoded(\'' + enc + '\')">'
         + '<button onclick="sendGcodeEncoded(\'' + enc + '\')" class="btn-primary" style="padding:0.35rem 0.75rem;font-size:0.75rem">Send</button>'
         + '</div>'
         : '';
 
-    return '<article id="pcard-' + enc + '" class="' + cardClass + '"' + clickAttr + '>'
-        + '<div class="px-4 py-3.5">'
+    const modelText = isBambu && live && live.printer_model ? live.printer_model : '';
+
+    return '<div class="px-4 py-3.5">'
         + '<div class="flex items-start justify-between gap-2 mb-3">'
         + '<div class="min-w-0">'
-        + '<p class="text-sm font-semibold leading-tight truncate">' + escHtml(printer.name) + '</p>'
-        + (isBambu && live && live.printer_model ? '<p class="text-[11px] text-zinc-400 mt-0.5">' + escHtml(live.printer_model) + '</p>' : '')
+        + '<p class="printer-name text-sm font-semibold leading-tight truncate">' + escHtml(printer.name) + '</p>'
+        + '<p class="printer-model text-[11px] text-zinc-400 mt-0.5' + (modelText ? '' : ' hidden') + '">' + escHtml(modelText) + '</p>'
         + '</div>'
         + '<div class="flex items-center gap-1.5 shrink-0">'
         + checkbox
-        + '<span class="text-[10px] border border-zinc-800 text-zinc-400 rounded-md px-1.5 py-0.5 font-medium">' + typeLabel + '</span>'
-        + '<span class="inline-flex items-center gap-1 border rounded-md px-1.5 py-0.5 text-[10px] ' + meta.badge + ' ' + meta.text + '"><span class="w-1.5 h-1.5 rounded-full ' + meta.dot + '"></span>' + meta.label + '</span>'
+        + '<span class="type-badge text-[10px] border border-zinc-800 text-zinc-400 rounded-md px-1.5 py-0.5 font-medium">' + typeLabel + '</span>'
+        + '<span class="status-badge inline-flex items-center gap-1 border rounded-md px-1.5 py-0.5 text-[10px] ' + meta.badge + ' ' + meta.text + '"><span class="status-dot w-1.5 h-1.5 rounded-full ' + meta.dot + '"></span><span class="status-label">' + meta.label + '</span></span>'
         + '</div>'
         + '</div>'
-        + (file ? '<p class="text-[11px] text-zinc-400 truncate mb-1" title="' + escHtml(file) + '">' + escHtml(file) + '</p>' : '')
-        + progressBar
+        + '<p class="file-name text-[11px] text-zinc-400 truncate mb-1' + (file ? '' : ' hidden') + '" title="' + escHtml(file) + '">' + escHtml(file) + '</p>'
+        + '<div class="progress-wrap w-full bg-zinc-800 rounded-full h-px mt-3' + ((status==='printing'||status==='paused') ? '' : ' hidden') + '"><div class="progress-fill h-px rounded-full bg-zinc-300 transition-all duration-500" style="width:' + progress + '%"></div></div>'
         + '<div class="grid grid-cols-3 gap-2 mt-3">'
-        + tempCell(live && live.active_extruder ? 'Active Toolhead' : 'Nozzle', nozzle, nozzleTgt)
-        + tempCell('Bed', bed, bedTgt)
+        + '<div class="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2">'
+        + '<p class="nozzle-label text-[10px] text-zinc-400 font-medium uppercase tracking-wide">' + (live && live.active_extruder ? 'Active Toolhead' : 'Nozzle') + '</p>'
+        + tempValueP('nozzle-value', nozzle, nozzleTgt)
+        + '</div>'
+        + '<div class="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2">'
+        + '<p class="text-[10px] text-zinc-400 font-medium uppercase tracking-wide">Bed</p>'
+        + tempValueP('bed-value', bed, bedTgt)
+        + '</div>'
         + '<div class="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-2"><p class="text-[10px] text-zinc-400 font-medium uppercase tracking-wide">ETA</p>'
-        + ((status==='printing'||status==='paused')
-            ? '<p class="text-xs text-zinc-300 mt-0.5">' + escHtml(formatRemaining(tr)) + '</p>'
-              + (printStartTimes[printer.id] ? '<p class="text-[10px] text-zinc-400 mt-0.5">' + formatElapsed(printStartTimes[printer.id]) + '</p>' : '')
-            : '<p class="text-xs text-zinc-400 mt-0.5">—</p>')
+        + '<p class="eta-text text-xs text-zinc-300 mt-0.5' + ((status==='printing'||status==='paused') ? '' : ' hidden') + '">' + escHtml(formatRemaining(tr)) + '</p>'
+        + '<p class="eta-elapsed text-[10px] text-zinc-400 mt-0.5' + (((status==='printing'||status==='paused') && printStartTimes[printer.id]) ? '' : ' hidden') + '">' + (printStartTimes[printer.id] ? formatElapsed(printStartTimes[printer.id]) : '') + '</p>'
+        + '<p class="eta-dash text-xs text-zinc-400 mt-0.5' + ((status==='printing'||status==='paused') ? ' hidden' : '') + '">—</p>'
         + '</div>'
         + '</div>'
-        + (error ? '<p class="mt-2 text-[11px] text-red-400">Error: ' + escHtml(error) + '</p>' : '')
-        + ((status==='printing' && filamentUsedMM !== null)
-            ? '<div class="flex items-center gap-3 mt-2">'
-              + '<span class="text-[11px] text-zinc-400"><i class="fas fa-ruler-horizontal mr-1"></i>' + (filamentUsedMM >= 1000 ? (filamentUsedMM/1000).toFixed(1)+'m' : Math.round(filamentUsedMM)+'mm') + '</span>'
-              + '</div>'
-            : '')
+        + '<p class="error-text mt-2 text-[11px] text-red-400' + (error ? '' : ' hidden') + '">' + (error ? 'Error: ' + escHtml(error) : '') + '</p>'
+        + '<div class="filament-wrap flex items-center gap-3 mt-2' + ((status==='printing' && filamentUsedMM !== null) ? '' : ' hidden') + '">'
+        + '<span class="text-[11px] text-zinc-400"><i class="fas fa-ruler-horizontal mr-1"></i><span class="filament-value">' + (filamentUsedMM !== null ? (filamentUsedMM >= 1000 ? (filamentUsedMM/1000).toFixed(1)+'m' : Math.round(filamentUsedMM)+'mm') : '') + '</span></span>'
+        + '</div>'
         + controls
         + '</div>'
         + camPanel
         + speedPanel
         + fanPanel
-        + gcodePanel
-        + '</article>';
+        + gcodePanel;
 }
 
 // ── Status poll ───────────────────────────────────────────────────────────────
@@ -1072,47 +1258,57 @@ async function pollStatus() {
 
 // ── Camera ────────────────────────────────────────────────────────────────────
 
+// Panels/buttons are never destroyed by a poll under keyed patch rendering, so a
+// failed load must self-heal by re-arming on reopen rather than relying on the
+// next rebuild to recreate the <img> from scratch.
 function toggleCamera(enc) {
-    const panel = document.getElementById('cam-' + enc);
-    if (!panel) return;
-    const img = panel.querySelector('img');
-    if (panel.classList.contains('hidden')) {
-        panel.classList.remove('hidden');
+    const id = decodePrinterId(enc);
+    const entry = printerCardEls.get(id);
+    if (!entry) return;
+    const { camPanel, camImg, camUnavailable, camBtn } = entry.hooks;
+    if (!camPanel) return;
+    if (camPanel.classList.contains('hidden')) {
+        camPanel.classList.remove('hidden');
         cameraLoading.add(enc);
-        const btn = document.querySelector('#pcard-' + enc + ' .cam-btn');
-        if (btn) btn.innerHTML = '<i class="fas fa-circle-notch fa-spin mr-1"></i>Camera';
-        if (img) {
-            const id = decodePrinterId(enc);
-            img.onload = () => {
+        if (camBtn) camBtn.innerHTML = '<i class="fas fa-circle-notch fa-spin mr-1"></i>Camera';
+        if (camImg) {
+            // Re-arm: clear any previous failure state and retry fresh every time
+            // the panel is opened, regardless of whether the last attempt failed.
+            // camImg carries its own inline display style (not the "hidden" class,
+            // which an inline style would silently override), so toggle that instead.
+            if (camUnavailable) camUnavailable.classList.add('hidden');
+            camImg.style.display = 'block';
+            camImg.onload = () => {
                 cameraLoading.delete(enc);
-                const b = document.querySelector('#pcard-' + enc + ' .cam-btn');
-                if (b) b.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
+                if (camBtn) camBtn.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
             };
-            img.onerror = () => {
+            camImg.onerror = () => {
                 cameraLoading.delete(enc);
-                const b = document.querySelector('#pcard-' + enc + ' .cam-btn');
-                if (b) b.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
-                panel.innerHTML = '<div class="p-4 text-center text-xs text-zinc-400"><i class="fas fa-video-slash mr-1"></i>Camera unavailable — check webcam service or URL</div>';
+                if (camBtn) camBtn.innerHTML = '<i class="fas fa-camera mr-1"></i>Camera';
+                camImg.style.display = 'none';
+                if (camUnavailable) camUnavailable.classList.remove('hidden');
             };
-            img.src = '/api/camera/' + encodeURIComponent(printerNameForId(id));
+            camImg.src = '/api/camera/' + encodeURIComponent(printerNameForId(id));
         }
     } else {
         cameraLoading.delete(enc);
-        panel.classList.add('hidden');
-        if (img) { img.onload = img.onerror = null; img.src = ''; }
+        camPanel.classList.add('hidden');
+        if (camImg) { camImg.onload = camImg.onerror = null; camImg.src = ''; }
     }
 }
 
 // ── Speed panel ───────────────────────────────────────────────────────────────
 
 function toggleSpeed(enc) {
-    const panel = document.getElementById('speed-' + enc);
+    const entry = printerCardEls.get(decodePrinterId(enc));
+    const panel = entry && entry.hooks.speedPanel;
     if (!panel) return;
     panel.classList.toggle('hidden');
 }
 
 function toggleFan(enc) {
-    const panel = document.getElementById('fan-' + enc);
+    const entry = printerCardEls.get(decodePrinterId(enc));
+    const panel = entry && entry.hooks.fanPanel;
     if (!panel) return;
     panel.classList.toggle('hidden');
 }
@@ -1144,21 +1340,23 @@ async function setFanSpeedEncoded(enc, pct) {
 // ── Gcode console ─────────────────────────────────────────────────────────────
 
 function toggleGcode(enc) {
-    const panel = document.getElementById('gcode-' + enc);
+    const entry = printerCardEls.get(decodePrinterId(enc));
+    const panel = entry && entry.hooks.gcodePanel;
     if (!panel) return;
     panel.classList.toggle('hidden');
     if (!panel.classList.contains('hidden')) {
-        const inp = document.getElementById('gcodeInput-' + enc);
+        const inp = entry.hooks.gcodeInput;
         if (inp) inp.focus();
     }
 }
 
 async function sendGcodeEncoded(enc) {
-    const inp = document.getElementById('gcodeInput-' + enc);
+    const id = decodePrinterId(enc);
+    const entry = printerCardEls.get(id);
+    const inp = entry && entry.hooks.gcodeInput;
     if (!inp) return;
     const line = inp.value.trim();
     if (!line) return;
-    const id = decodePrinterId(enc);
     try {
         await apiFetch('/api/control/' + encodeURIComponent(printerNameForId(id)) + '/gcode', { method:'POST', body:JSON.stringify({ line }) });
         toast('GCode sent: ' + line, 'info');
