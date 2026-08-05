@@ -645,6 +645,70 @@ func assignMissingIDs(printers []config.Printer) {
 	}
 }
 
+// normalizeName folds a printer name for uniqueness comparisons only. Every
+// identity lookup by name elsewhere in this file (delete, camera, control,
+// applyStoredSecrets' name-fallback) stays exact-match and untouched —
+// case-folding applies solely to the uniqueness guards below.
+func normalizeName(s string) string {
+	return strings.ToLower(strings.TrimSpace(s))
+}
+
+// errDuplicatePrinterName marks a save rejected because it would introduce
+// two printers sharing the same name (case-insensitively). Matched via
+// errors.Is in handleConfig to pick the right HTTP status.
+var errDuplicatePrinterName = errors.New("printer names must be unique")
+
+// hasDuplicateName reports whether incoming's name collides
+// (case-insensitively) with any printer already in existing.
+func hasDuplicateName(existing []config.Printer, incoming config.Printer) bool {
+	target := normalizeName(incoming.Name)
+	for _, p := range existing {
+		if normalizeName(p.Name) == target {
+			return true
+		}
+	}
+	return false
+}
+
+// rejectNewlyIntroducedDuplicateNames checks a full-replace printer list
+// against the previous one and rejects only a name that the payload itself
+// makes duplicate. A name that was already duplicated in oldPrinters is
+// grandfathered through unchanged (logged once) — no uniqueness check
+// existed before this session, so some installs may already have duplicates
+// on disk, and a strict reject here would make those installs permanently
+// unable to save any change through this path, including the rename that
+// would fix the duplicate.
+func rejectNewlyIntroducedDuplicateNames(oldPrinters, newPrinters []config.Printer) error {
+	oldCounts := make(map[string]int, len(oldPrinters))
+	for _, p := range oldPrinters {
+		oldCounts[normalizeName(p.Name)]++
+	}
+	newCounts := make(map[string]int, len(newPrinters))
+	for _, p := range newPrinters {
+		newCounts[normalizeName(p.Name)]++
+	}
+	for norm, count := range newCounts {
+		if count < 2 {
+			continue
+		}
+		if oldCounts[norm] >= 2 {
+			log.Printf("[config] printer name %q is already duplicated in the stored config — kept as-is", norm)
+			continue
+		}
+		// Find one of the actual (non-normalized) colliding names for a
+		// readable message.
+		display := norm
+		for _, p := range newPrinters {
+			if normalizeName(p.Name) == norm {
+				display = p.Name
+				break
+			}
+		}
+		return fmt.Errorf("more than one printer named %q: %w", display, errDuplicatePrinterName)
+	}
+	return nil
+}
+
 func redactConfig(cfg *config.Config) redactedConfig {
 	out := redactedConfig{
 		APIKeySet:          cfg.APIKey != "",
@@ -750,6 +814,11 @@ func resolveConfigUpdate(old *config.Config, body []byte) (*config.Config, error
 		// already carry an ID (a rename/edit of an existing printer) keep it
 		// untouched — the client must be able to echo back the ID it has.
 		assignMissingIDs(newCfg.Printers)
+		if old != nil {
+			if err := rejectNewlyIntroducedDuplicateNames(old.Printers, newCfg.Printers); err != nil {
+				return nil, err
+			}
+		}
 	}
 	applyStoredSecrets(&newCfg, old)
 	return &newCfg, nil
@@ -775,7 +844,7 @@ func handleConfig(w http.ResponseWriter, r *http.Request) {
 		newCfg, err := resolveConfigUpdate(oldCfg, body)
 		if err != nil {
 			configMutex.Unlock()
-			if errors.Is(err, errRefuseClearPrinters) {
+			if errors.Is(err, errRefuseClearPrinters) || errors.Is(err, errDuplicatePrinterName) {
 				http.Error(w, err.Error(), http.StatusConflict)
 			} else {
 				http.Error(w, err.Error(), http.StatusBadRequest)
@@ -813,11 +882,17 @@ func handlePrinters(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+
+		configMutex.Lock()
+		if hasDuplicateName(configStore.Printers, p) {
+			configMutex.Unlock()
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{"error": fmt.Sprintf("a printer named %q already exists — printer names must be unique", p.Name)})
+			return
+		}
 		// Server-generated only — a client-supplied id is never trusted on
 		// create, so "generated once on creation" is an actual guarantee.
 		p.ID = config.NewPrinterID()
-
-		configMutex.Lock()
 		configStore.Printers = append(configStore.Printers, p)
 		cfg := configStore
 		configMutex.Unlock()

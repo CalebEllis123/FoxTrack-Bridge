@@ -113,6 +113,70 @@ func TestDeleteLastPrinter(t *testing.T) {
 	}
 }
 
+// POST /api/printers rejects a name that collides case-insensitively with an
+// existing printer — this path always creates something new, so there's no
+// legacy state to grandfather.
+func TestHandlePrinters_POST_RejectsCaseInsensitiveDuplicateName(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configMutex.Lock()
+	configStore = &config.Config{Printers: []config.Printer{
+		{ID: "printer-1", Name: "Ender 3", MoonrakerURL: "http://127.0.0.1:1/"},
+	}}
+	configMutex.Unlock()
+
+	body := `{"name":"ender 3","moonraker_url":"http://127.0.0.1:2/"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/printers", strings.NewReader(body))
+	handlePrinters(rec, req)
+
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409, body: %s", rec.Code, rec.Body.String())
+	}
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	if len(configStore.Printers) != 1 {
+		t.Fatalf("printers = %d, want 1 (rejected add must not mutate config)", len(configStore.Printers))
+	}
+}
+
+// A full-replace payload that exactly reproduces an already-duplicated old
+// config must save successfully — nothing enforced uniqueness before this
+// session, so some installs may already have duplicates on disk, and this
+// path must remain saveable for them (including the rename that would fix
+// the duplicate).
+func TestResolveConfigUpdate_FullReplaceGrandfathersPreexistingDuplicateNames(t *testing.T) {
+	old := &config.Config{Printers: []config.Printer{
+		{ID: "id-1", Name: "Ender 3", MoonrakerURL: "http://127.0.0.1:1/"},
+		{ID: "id-2", Name: "Ender 3", MoonrakerURL: "http://127.0.0.1:2/"},
+	}}
+	got, err := resolveConfigUpdate(old, []byte(`{"printers":[
+		{"id":"id-1","name":"Ender 3","moonraker_url":"http://127.0.0.1:1/"},
+		{"id":"id-2","name":"Ender 3","moonraker_url":"http://127.0.0.1:2/"}
+	]}`))
+	if err != nil {
+		t.Fatalf("pre-existing duplicate should be grandfathered through, got error: %v", err)
+	}
+	if len(got.Printers) != 2 {
+		t.Fatalf("printers = %d, want 2", len(got.Printers))
+	}
+}
+
+// A full-replace payload that turns a previously-unique name into a
+// duplicate (a newly introduced collision) must be rejected.
+func TestResolveConfigUpdate_FullReplaceRejectsNewlyIntroducedDuplicateName(t *testing.T) {
+	old := &config.Config{Printers: []config.Printer{
+		{ID: "id-1", Name: "Ender 3", MoonrakerURL: "http://127.0.0.1:1/"},
+		{ID: "id-2", Name: "Prusa", MoonrakerURL: "http://127.0.0.1:2/"},
+	}}
+	_, err := resolveConfigUpdate(old, []byte(`{"printers":[
+		{"id":"id-1","name":"Ender 3","moonraker_url":"http://127.0.0.1:1/"},
+		{"id":"id-2","name":"ender 3","moonraker_url":"http://127.0.0.1:2/"}
+	]}`))
+	if !errors.Is(err, errDuplicatePrinterName) {
+		t.Fatalf("err = %v, want errDuplicatePrinterName", err)
+	}
+}
+
 // The core scenario this whole feature exists for: a printer is renamed (its
 // name changes) but its ID is echoed back unchanged and its lan_code is left
 // blank ("keep what's stored"). The secret must survive the rename — matching
