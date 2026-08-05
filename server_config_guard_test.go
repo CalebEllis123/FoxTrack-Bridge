@@ -113,6 +113,57 @@ func TestDeleteLastPrinter(t *testing.T) {
 	}
 }
 
+// DELETE /api/printers/{token} also accepts a printer ID in the same URL
+// slot, resolving it before touching name-keyed mqtt/lan teardown.
+func TestDeletePrinterByID(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configMutex.Lock()
+	configStore = &config.Config{Printers: []config.Printer{
+		{ID: "printer-1", Name: "Only", MoonrakerURL: "http://127.0.0.1:1/"},
+	}}
+	configMutex.Unlock()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/printers/printer-1", nil)
+	handlePrinterByName(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	configMutex.RLock()
+	n := len(configStore.Printers)
+	configMutex.RUnlock()
+	if n != 0 {
+		t.Fatalf("printers = %d, want 0 after deleting by id", n)
+	}
+}
+
+// A token that matches an ID takes priority over a name match, deleting only
+// the ID-matched printer even if another printer happens to be named
+// identically to the token string.
+func TestDeletePrinterByID_TakesPriorityOverNameCollision(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	configMutex.Lock()
+	configStore = &config.Config{Printers: []config.Printer{
+		{ID: "printer-1", Name: "printer-2", MoonrakerURL: "http://127.0.0.1:1/"},
+		{ID: "printer-2", Name: "Actual Target", MoonrakerURL: "http://127.0.0.1:2/"},
+	}}
+	configMutex.Unlock()
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/printers/printer-2", nil)
+	handlePrinterByName(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	configMutex.RLock()
+	defer configMutex.RUnlock()
+	if len(configStore.Printers) != 1 || configStore.Printers[0].ID != "printer-1" {
+		t.Fatalf("printers = %+v, want only the printer whose id wasn't matched", configStore.Printers)
+	}
+}
+
 // POST /api/printers rejects a name that collides case-insensitively with an
 // existing printer — this path always creates something new, so there's no
 // legacy state to grandfather.

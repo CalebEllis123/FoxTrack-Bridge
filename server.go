@@ -912,7 +912,13 @@ func handlePrinters(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handlePrinterByName handles DELETE /api/printers/{name}
+// handlePrinterByName handles DELETE /api/printers/{token}. token is checked
+// against printer IDs first, falling back to an exact name match if it
+// matches no ID — so the current, name-only dashboard keeps working exactly
+// as before, while a future ID-aware client can delete by ID with no further
+// server change. Deletion internals (mqtt/lan teardown) are still
+// name-keyed, so once a match is resolved we always operate on the matched
+// printer's actual Name, never the raw token.
 func handlePrinterByName(w http.ResponseWriter, r *http.Request) {
 	jsonHeaders(w)
 	if r.Method == "OPTIONS" {
@@ -922,27 +928,45 @@ func handlePrinterByName(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	name := strings.TrimPrefix(r.URL.Path, "/api/printers/")
-	if name == "" {
-		http.Error(w, "missing printer name", http.StatusBadRequest)
+	token := strings.TrimPrefix(r.URL.Path, "/api/printers/")
+	if token == "" {
+		http.Error(w, "missing printer id or name", http.StatusBadRequest)
 		return
 	}
+
 	configMutex.Lock()
+	matchByID := false
+	for _, p := range configStore.Printers {
+		if p.ID != "" && p.ID == token {
+			matchByID = true
+			break
+		}
+	}
+	var removedNames []string
 	printers := configStore.Printers[:0]
 	for _, p := range configStore.Printers {
-		if p.Name != name {
-			printers = append(printers, p)
+		matches := p.Name == token
+		if matchByID {
+			matches = p.ID == token
 		}
+		if matches {
+			removedNames = append(removedNames, p.Name)
+			continue
+		}
+		printers = append(printers, p)
 	}
 	configStore.Printers = printers
 	cfg := configStore
 	configMutex.Unlock()
 	_ = config.SaveConfig(cfg)
-	// Stop whichever connection type the printer had. Both calls are no-ops
-	// for names they don't manage, so no need to know which type it was.
-	mqttpkg.DisconnectPrinter(name)
-	mqttpkg.RemovePrinterState(name)
-	lanCtrl.RemovePrinter(name)
+	// Stop whichever connection type each removed printer had. Both calls
+	// are no-ops for names they don't manage, so no need to know which type
+	// it was.
+	for _, name := range removedNames {
+		mqttpkg.DisconnectPrinter(name)
+		mqttpkg.RemovePrinterState(name)
+		lanCtrl.RemovePrinter(name)
+	}
 	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
